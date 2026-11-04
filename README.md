@@ -1,7 +1,7 @@
 
 ## Live Demo
 
-🚀 **Live Project:** [https://cse-placement-app-jswqfb73ij6jvpwgqreryy.streamlit.app/]
+🚀 **Live Project:** [(https://cse-placement-app-jswqfb73ij6jvpwgqreryy.streamlit.app/)]
 
 Explore the live application to access placement roadmaps, track preparation tasks, assess placement readiness, interact with mentors, submit feedback, and manage job applications.
 
