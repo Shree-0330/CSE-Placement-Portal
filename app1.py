@@ -1,9 +1,10 @@
-
 import os
 import sqlite3
 import hashlib
+import traceback
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 
 import pandas as pd
 import streamlit as st
@@ -20,7 +21,7 @@ st.set_page_config(
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "placement_portal_v4.db"
+DB_PATH = Path(os.getenv("PORTAL_DB_PATH", str(BASE_DIR / "placement_portal_v4.db")))
 
 YEARS = ["First Year", "Second Year", "Third Year", "Final Year"]
 
@@ -232,11 +233,20 @@ div.stButton > button {
 # 4. DATABASE FUNCTIONS
 # =========================================================
 
+@contextmanager
 def connect():
-    con = sqlite3.connect(DB_PATH, timeout=20)
+    """Open a SQLite connection and always close it after use."""
+    con = sqlite3.connect(DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
-    return con
+    try:
+        yield con
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def execute(sql, params=()):
@@ -268,6 +278,7 @@ def hash_password(password):
 
 
 def setup_database():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as con:
         con.executescript("""
         CREATE TABLE IF NOT EXISTS users (
@@ -335,7 +346,9 @@ def setup_database():
             created_at TEXT NOT NULL
         );
         """)
-
+        # =========================================================
+# 5. CREATE DEFAULT MENTOR
+# =========================================================
 
 def create_default_mentor():
     username = os.getenv(
@@ -364,7 +377,7 @@ def create_default_mentor():
 
 
 # =========================================================
-# 5. COMMON BANNER
+# 6. COMMON BANNER
 # =========================================================
 
 def banner(title, subtitle):
@@ -380,7 +393,7 @@ def banner(title, subtitle):
 
 
 # =========================================================
-# 6. LOGIN AND REGISTRATION
+# 7. LOGIN AND REGISTRATION
 # =========================================================
 
 def login_page():
@@ -398,12 +411,17 @@ def login_page():
             "Mentor Registration",
         ])
 
+        # -------------------------------------------------
+        # LOGIN
+        # -------------------------------------------------
+
         with login_tab:
             with st.form("login_form"):
                 username = st.text_input("Username")
                 password = st.text_input(
                     "Password", type="password"
                 )
+
                 submit = st.form_submit_button(
                     "Sign In",
                     type="primary",
@@ -436,17 +454,25 @@ def login_page():
                 "**mentor** / **Mentor@123**"
             )
 
+        # -------------------------------------------------
+        # STUDENT REGISTRATION
+        # -------------------------------------------------
+
         with student_tab:
             with st.form("student_registration"):
                 name = st.text_input("Full Name")
                 username = st.text_input("Create Username")
+
                 password = st.text_input(
                     "Create Password", type="password"
                 )
+
                 confirm = st.text_input(
                     "Confirm Password", type="password"
                 )
+
                 year = st.selectbox("Academic Year", YEARS)
+
                 branch = st.text_input(
                     "Branch",
                     value="Computer Science & Engineering",
@@ -461,16 +487,20 @@ def login_page():
             if submit:
                 if not name.strip() or not username.strip():
                     st.error("Name and username are required.")
+
                 elif len(username.strip()) < 3:
                     st.error(
                         "Username must contain at least 3 characters."
                     )
+
                 elif len(password) < 8:
                     st.error(
                         "Password must contain at least 8 characters."
                     )
+
                 elif password != confirm:
                     st.error("Passwords do not match.")
+
                 else:
                     try:
                         execute("""
@@ -486,11 +516,19 @@ def login_page():
                             branch.strip(),
                             now(),
                         ))
+
                         st.success(
                             "Student account created. You can now sign in."
                         )
+
                     except sqlite3.IntegrityError:
-                        st.error("That username is already registered.")
+                        st.error(
+                            "That username is already registered."
+                        )
+
+        # -------------------------------------------------
+        # MENTOR REGISTRATION
+        # -------------------------------------------------
 
         with mentor_tab:
             st.warning(
@@ -501,15 +539,18 @@ def login_page():
 
             with st.form("mentor_registration"):
                 name = st.text_input("Mentor Full Name")
+
                 username = st.text_input(
                     "Create Mentor Username",
                     key="mentor_username",
                 )
+
                 password = st.text_input(
                     "Create Password",
                     type="password",
                     key="mentor_password",
                 )
+
                 confirm = st.text_input(
                     "Confirm Password",
                     type="password",
@@ -527,16 +568,20 @@ def login_page():
                     st.error(
                         "Mentor name and username are required."
                     )
+
                 elif len(username.strip()) < 3:
                     st.error(
                         "Username must contain at least 3 characters."
                     )
+
                 elif len(password) < 8:
                     st.error(
                         "Password must contain at least 8 characters."
                     )
+
                 elif password != confirm:
                     st.error("Passwords do not match.")
+
                 else:
                     try:
                         execute("""
@@ -549,16 +594,20 @@ def login_page():
                             name.strip(),
                             now(),
                         ))
+
                         st.success(
                             "Mentor account created. Sign in using "
                             "your new account."
                         )
+
                     except sqlite3.IntegrityError:
-                        st.error("That username is already registered.")
+                        st.error(
+                            "That username is already registered."
+                        )
 
 
 # =========================================================
-# 7. RESOURCES & TASKS
+# 8. RESOURCES & TASKS
 # =========================================================
 
 def resources_tasks_page(user):
@@ -619,6 +668,7 @@ def resources_tasks_page(user):
         "Completed Tasks",
         f"{completed_count}/{total_count}",
     )
+
     col2.metric(
         "Completion Progress",
         f"{progress * 100:.1f}%",
@@ -638,40 +688,40 @@ def resources_tasks_page(user):
         for task in task_list:
             task_key = f"{year}:{category}:{task}"
 
+            is_completed = task_key in completed_set
+
             checked = st.checkbox(
                 task,
-                value=task_key in completed_set,
-                key=f"task-{user['id']}-{task_key}",
+                value=is_completed,
+                key=f"task_{user['id']}_{task_key}",
             )
 
-            if checked != (task_key in completed_set):
-                execute("""
-                    INSERT INTO tasks
-                    (student_id, task_key, completed)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(student_id, task_key)
-                    DO UPDATE SET completed=excluded.completed
-                """, (
-                    user["id"],
-                    task_key,
-                    int(checked),
-                ))
+            if checked != is_completed:
+                if checked:
+                    execute("""
+                        INSERT INTO tasks
+                        (student_id, task_key, completed)
+                        VALUES (?, ?, 1)
+                        ON CONFLICT(student_id, task_key)
+                        DO UPDATE SET completed=1
+                    """, (
+                        user["id"],
+                        task_key,
+                    ))
+
+                else:
+                    execute("""
+                        DELETE FROM tasks
+                        WHERE student_id=? AND task_key=?
+                    """, (
+                        user["id"],
+                        task_key,
+                    ))
+
                 st.rerun()
 
         st.divider()
-
-    if completed_count == total_count:
-        st.success(
-            f"🎉 All tasks for {year} are completed!"
-        )
-    else:
-        st.info(
-            f"You have {total_count - completed_count} "
-            f"tasks remaining for {year}."
-        )
-
-
-# =========================================================
+        # =========================================================
 # 8. STUDENT DASHBOARD
 # =========================================================
 
@@ -699,7 +749,6 @@ def student_dashboard(user):
         row["task_key"] for row in completed_rows
     }
 
-    # FIX: count only tasks belonging to the selected year.
     completed_count = sum(
         1 for key in task_keys if key in completed_set
     )
@@ -724,8 +773,15 @@ def student_dashboard(user):
     """, (user["id"],))
 
     a, b, c, d = st.columns(4)
-    a.metric("Completed Tasks", f"{completed_count}/{total_count}")
-    b.metric("Learning Progress", f"{progress * 100:.1f}%")
+
+    a.metric(
+        "Completed Tasks",
+        f"{completed_count}/{total_count}",
+    )
+    b.metric(
+        "Learning Progress",
+        f"{progress * 100:.1f}%",
+    )
     c.metric("Mentor Questions", question_count)
     d.metric("Applications", application_count)
 
@@ -737,13 +793,21 @@ def student_dashboard(user):
     )
 
     if completed_count == total_count:
-        st.success("🎉 You completed all tasks for this academic year.")
+        st.success(
+            "🎉 You completed all tasks for this academic year."
+        )
     elif completed_count == 0:
-        st.info("Start completing tasks in Resources & Tasks.")
+        st.info(
+            "Start completing tasks in Resources & Tasks."
+        )
     elif progress < 0.5:
-        st.warning("Keep going. Follow your learning roadmap.")
+        st.warning(
+            "Keep going. Follow your learning roadmap."
+        )
     else:
-        st.success("Good progress. Continue with your remaining tasks.")
+        st.success(
+            "Good progress. Continue with your remaining tasks."
+        )
 
     left, right = st.columns(2)
 
@@ -761,7 +825,9 @@ def student_dashboard(user):
             for task in pending[:5]:
                 st.write("◻️", task)
         else:
-            st.success("All roadmap tasks are complete.")
+            st.success(
+                "All roadmap tasks are complete."
+            )
 
     with right:
         st.subheader("Recent Applications")
@@ -780,7 +846,9 @@ def student_dashboard(user):
                 use_container_width=True,
             )
         else:
-            st.info("Start tracking your applications.")
+            st.info(
+                "Start tracking your applications."
+            )
 
 
 # =========================================================
@@ -801,18 +869,35 @@ def placement_readiness(user):
     left, right = st.columns(2, gap="large")
 
     with left:
-        coding = st.slider("Coding Score", 0, 100, 50)
-        dsa = st.slider("DSA Score", 0, 100, 50)
-        technical = st.slider("Technical Skills", 0, 100, 50)
-        projects = st.slider("Projects Score", 0, 100, 50)
-        communication = st.slider("Communication Score", 0, 100, 50)
+        coding = st.slider(
+            "Coding Score", 0, 100, 50
+        )
+        dsa = st.slider(
+            "DSA Score", 0, 100, 50
+        )
+        technical = st.slider(
+            "Technical Skills", 0, 100, 50
+        )
+        projects = st.slider(
+            "Projects Score", 0, 100, 50
+        )
+        communication = st.slider(
+            "Communication Score", 0, 100, 50
+        )
 
     with right:
-        aptitude = st.slider("Aptitude Score", 0, 100, 50)
-        internship = st.selectbox(
-            "Internship Experience", ["No", "Yes"]
+        aptitude = st.slider(
+            "Aptitude Score", 0, 100, 50
         )
-        resume = st.slider("Resume Score", 0, 100, 50)
+
+        internship = st.selectbox(
+            "Internship Experience",
+            ["No", "Yes"],
+        )
+
+        resume = st.slider(
+            "Resume Score", 0, 100, 50
+        )
 
         st.markdown("### Assessment Guide")
         st.write("**0–39:** Needs improvement")
@@ -845,20 +930,39 @@ def placement_readiness(user):
 
         if score >= 80:
             result = "Strong Preparation"
-            st.success(f"Placement readiness: {result}")
+            st.success(
+                f"Placement readiness: {result}"
+            )
+
         elif score >= 60:
             result = "Good Preparation"
-            st.success(f"Placement readiness: {result}")
+            st.success(
+                f"Placement readiness: {result}"
+            )
+
         elif score >= 40:
             result = "Developing"
-            st.warning(f"Placement readiness: {result}")
+            st.warning(
+                f"Placement readiness: {result}"
+            )
+
         else:
             result = "Needs Improvement"
-            st.error(f"Placement readiness: {result}")
+            st.error(
+                f"Placement readiness: {result}"
+            )
 
         col1, col2 = st.columns([1, 2])
-        col1.metric("Readiness Score", f"{score}/100")
-        col2.write(f"**Assessment:** {result}")
+
+        col1.metric(
+            "Readiness Score",
+            f"{score}/100",
+        )
+
+        col2.write(
+            f"**Assessment:** {result}"
+        )
+
         col2.progress(score / 100)
 
         scores = {
@@ -871,52 +975,92 @@ def placement_readiness(user):
             "Communication": communication,
         }
 
-        weak = [name for name, value in scores.items() if value < 40]
+        weak = [
+            name
+            for name, value in scores.items()
+            if value < 40
+        ]
+
         medium = [
-            name for name, value in scores.items()
+            name
+            for name, value in scores.items()
             if 40 <= value < 60
         ]
 
         st.subheader("Skill Analysis")
 
         if weak:
-            st.error("Priority areas: " + ", ".join(weak))
-        if medium:
-            st.warning("Practise more: " + ", ".join(medium))
-        if not weak and not medium:
-            st.success("Your entered skill scores are well balanced.")
-
-        if internship == "No":
-            st.warning(
-                "Consider internships or practical industry-style projects."
+            st.error(
+                "Priority areas: " + ", ".join(weak)
             )
-        if projects < 50:
-            st.warning("Improve your projects and documentation.")
-        if resume < 50:
-            st.warning("Review your resume and highlight relevant projects.")
-        if communication < 50:
-            st.warning("Practise self-introductions and mock interviews.")
 
+        if medium:
+            st.warning(
+                "Practise more: " + ", ".join(medium)
+            )
+
+        if not weak and not medium:
+            st.success(
+                "Your entered skill scores are well balanced."
+            )
+
+        # Save assessment in database.
         execute("""
             INSERT INTO assessments
-            (student_id, coding, aptitude, dsa, internship, technical,
-             resume, projects, communication, score, result, created_at)
+            (
+                student_id,
+                coding,
+                aptitude,
+                dsa,
+                internship,
+                technical,
+                resume,
+                projects,
+                communication,
+                score,
+                result,
+                created_at
+            )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            user["id"], coding, aptitude, dsa, internship,
-            technical, resume, projects, communication,
-            score, result, now(),
+            user["id"],
+            coding,
+            aptitude,
+            dsa,
+            internship,
+            technical,
+            resume,
+            projects,
+            communication,
+            score,
+            result,
+            now(),
         ))
 
-        st.success("Assessment saved successfully.")
+        st.success(
+            "Your assessment has been saved successfully."
+        )
 
-    st.subheader("Previous Assessments")
+    # Previous assessment history.
+    st.divider()
+    st.subheader("Previous Assessment History")
 
     history = fetch_all("""
-        SELECT created_at, score, result
+        SELECT
+            coding,
+            aptitude,
+            dsa,
+            technical,
+            resume,
+            projects,
+            communication,
+            score,
+            result,
+            created_at
         FROM assessments
         WHERE student_id=?
-        ORDER BY id DESC LIMIT 10
+        ORDER BY id DESC
+        LIMIT 10
     """, (user["id"],))
 
     if history:
@@ -926,68 +1070,124 @@ def placement_readiness(user):
             use_container_width=True,
         )
     else:
-        st.caption("Your saved assessment results will appear here.")
+        st.info(
+            "You have not completed any assessments yet."
+        )
 
 
 # =========================================================
-# 10. ASK A MENTOR
+# 10. ASK MENTOR
 # =========================================================
 
-def ask_mentor(user):
+def ask_mentor_page(user):
     banner(
-        "💬 Ask a Mentor",
-        "Submit questions about coding, projects, resumes and interviews.",
+        "💬 Ask Your Mentor",
+        "Ask questions and get guidance from your placement mentor.",
     )
 
-    with st.form("ask_question"):
+    st.subheader("Submit a Question")
+
+    with st.form("ask_mentor_form"):
         topic = st.selectbox(
-            "Guidance Topic",
+            "Select Topic",
             [
-                "Coding", "DSA", "Projects", "Internship",
-                "Resume", "Aptitude", "Technical Interview", "HR Interview",
+                "Programming",
+                "Data Structures & Algorithms",
+                "Database / SQL",
+                "Aptitude",
+                "Resume",
+                "Interview Preparation",
+                "Projects",
+                "Career Guidance",
+                "Other",
             ],
         )
-        question = st.text_area("Your Question")
+
+        question = st.text_area(
+            "Write Your Question",
+            placeholder="Type your question here...",
+            height=130,
+        )
+
         submit = st.form_submit_button(
-            "Send Question", type="primary"
+            "Submit Question",
+            type="primary",
+            use_container_width=True,
         )
 
     if submit:
         if not question.strip():
-            st.error("Please enter a question.")
+            st.error(
+                "Please enter your question."
+            )
         else:
             execute("""
                 INSERT INTO questions
                 (student_id, question, topic, asked_at)
                 VALUES (?, ?, ?, ?)
-            """, (user["id"], question.strip(), topic, now()))
+            """, (
+                user["id"],
+                question.strip(),
+                topic,
+                now(),
+            ))
 
-            st.success("Question sent to the mentor.")
+            st.success(
+                "Your question has been submitted to the mentor."
+            )
+
             st.rerun()
 
-    rows = fetch_all("""
-        SELECT * FROM questions
-        WHERE student_id=?
-        ORDER BY id DESC
+    st.divider()
+
+    st.subheader("My Questions and Answers")
+
+    questions = fetch_all("""
+        SELECT
+            q.id,
+            q.question,
+            q.topic,
+            q.answer,
+            q.asked_at,
+            q.answered_at,
+            u.full_name AS mentor_name
+        FROM questions q
+        LEFT JOIN users u ON q.mentor_id = u.id
+        WHERE q.student_id=?
+        ORDER BY q.id DESC
     """, (user["id"],))
 
-    st.subheader("Question History")
+    if not questions:
+        st.info(
+            "You have not submitted any questions yet."
+        )
 
-    if not rows:
-        st.info("You have not asked any questions yet.")
+    for item in questions:
+        with st.expander(
+            f"Q{item['id']} — {item['topic']} "
+            f"({item['asked_at']})"
+        ):
+            st.markdown("**Your Question:**")
+            st.write(item["question"])
 
-    for row in rows:
-        with st.expander(f"{row['topic']} — Question #{row['id']}"):
-            st.write(row["question"])
+            if item["answer"]:
+                st.success("Mentor's Answer")
+                st.write(item["answer"])
 
-            if row["answer"]:
-                st.success("Mentor Response")
-                st.write(row["answer"])
+                if item["mentor_name"]:
+                    st.caption(
+                        f"Answered by: {item['mentor_name']}"
+                    )
+
+                st.caption(
+                    f"Answered at: {item['answered_at']}"
+                )
+
             else:
-                st.warning("Waiting for mentor response.")
-
-
-# =========================================================
+                st.warning(
+                    "Waiting for mentor response."
+                )
+                # =========================================================
 # 11. STUDENT FEEDBACK
 # =========================================================
 
@@ -1323,36 +1523,53 @@ def mentor_outcomes():
         file_name="placement_outcomes.csv",
         mime="text/csv",
     )
+    # =========================================================
+# 14. CONNECT ASK MENTOR PAGE
+# =========================================================
+
+def ask_mentor(user):
+    ask_mentor_page(user)
 
 
 # =========================================================
-# 14. MAIN APPLICATION AND NAVIGATION
+# 15. MAIN APPLICATION AND NAVIGATION
 # =========================================================
 
 def main():
+    # Initialize database and default mentor account.
     setup_database()
     create_default_mentor()
 
     user = st.session_state.get("user")
 
+    # Show login page if the user is not logged in.
     if user is None:
         login_page()
         return
 
+    # -----------------------------------------------------
+    # SIDEBAR NAVIGATION
+    # -----------------------------------------------------
+
     with st.sidebar:
         st.markdown("## 🎓 CSE PLACEMENT PORTAL")
+
         st.write(f"**{user['full_name']}**")
         st.caption(user["role"].upper())
+
         st.divider()
 
         if user["role"] == "mentor":
+
             pages = [
                 "Dashboard",
                 "Student Questions",
                 "Student Feedback",
                 "Placement Outcomes",
             ]
+
         else:
+
             pages = [
                 "Dashboard",
                 "Resources & Tasks",
@@ -1370,45 +1587,100 @@ def main():
 
         st.divider()
 
-        if st.button("🚪 Logout", use_container_width=True):
+        # -------------------------------------------------
+        # LOGOUT
+        # -------------------------------------------------
+
+        if st.button(
+            "🚪 Logout",
+            use_container_width=True,
+        ):
             st.session_state.pop("user", None)
             st.rerun()
 
+    # -----------------------------------------------------
+    # MENTOR PAGES
+    # -----------------------------------------------------
+
     if user["role"] == "mentor":
+
         routes = {
             "Dashboard": lambda: mentor_dashboard(user),
-            "Student Questions": lambda: mentor_questions(user),
-            "Student Feedback": mentor_feedback,
-            "Placement Outcomes": mentor_outcomes,
-        }
-    else:
-        routes = {
-            "Dashboard": lambda: student_dashboard(user),
-            "Resources & Tasks": lambda: resources_tasks_page(user),
-            "Placement Readiness Assessment":
-                lambda: placement_readiness(user),
-            "Ask a Mentor": lambda: ask_mentor(user),
-            "Mentor Responses & Feedback":
-                lambda: responses_feedback(user),
-            "Placement Tracker": lambda: placement_tracker(user),
+
+            "Student Questions":
+                lambda: mentor_questions(user),
+
+            "Student Feedback":
+                mentor_feedback,
+
+            "Placement Outcomes":
+                mentor_outcomes,
         }
 
+    # -----------------------------------------------------
+    # STUDENT PAGES
+    # -----------------------------------------------------
+
+    else:
+
+        routes = {
+            "Dashboard":
+                lambda: student_dashboard(user),
+
+            "Resources & Tasks":
+                lambda: resources_tasks_page(user),
+
+            "Placement Readiness Assessment":
+                lambda: placement_readiness(user),
+
+            "Ask a Mentor":
+                lambda: ask_mentor(user),
+
+            "Mentor Responses & Feedback":
+                lambda: responses_feedback(user),
+
+            "Placement Tracker":
+                lambda: placement_tracker(user),
+        }
+
+    # Display selected page.
     routes[page]()
 
 
+# =========================================================
+# 16. APPLICATION ENTRY POINT AND ERROR HANDLING
+# =========================================================
+
 if __name__ == "__main__":
+
     try:
         main()
+
     except sqlite3.Error as error:
+
+        print(traceback.format_exc())
+
         st.error("A database error occurred.")
+
         st.code(str(error))
+
         st.warning(
             "Back up your database before attempting database changes."
         )
+
     except Exception as error:
-        st.error("The application encountered an unexpected error.")
-        st.code(f"{type(error).__name__}: {error}")
+
+        print(traceback.format_exc())
+
+        st.error(
+            "The application encountered an unexpected error."
+        )
+
+        st.code(
+            f"{type(error).__name__}: {error}"
+        )
+
         st.info(
-            "Check the VS Code terminal for the full traceback "
-            "if the problem continues."
+            "The full error traceback has been written "
+            "to the application logs."
         )
