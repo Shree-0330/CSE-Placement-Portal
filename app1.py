@@ -2,25 +2,26 @@
 import os
 import sqlite3
 import hashlib
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
+
 # ============================================================
-# CSE PLACEMENT ROADMAP & MENTORSHIP PORTAL
-# Python + Streamlit + SQLite
+# CONFIGURATION
 # ============================================================
 
 st.set_page_config(
     page_title="CSE Placement Roadmap & Mentorship Portal",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
 BASE_DIR = Path(__file__).resolve().parent
+
 DB_PATH = Path(
     os.getenv(
         "PORTAL_DB_PATH",
@@ -190,156 +191,70 @@ ROADMAP = {
 
 
 # ============================================================
-# PROFESSIONAL DESIGN
+# DATABASE
 # ============================================================
 
-st.markdown("""
-<style>
-
-.stApp {
-    background: #f4f7fb;
-    color: #202b3c;
-}
-
-.block-container {
-    max-width: 1450px;
-    padding-top: 1.4rem;
-    padding-bottom: 3rem;
-}
-
-[data-testid="stSidebar"] {
-    background: #142746;
-}
-
-[data-testid="stSidebar"] * {
-    color: #f7f9fc !important;
-}
-
-[data-testid="stMetric"] {
-    background: #ffffff;
-    border: 1px solid #e4eaf2;
-    border-radius: 14px;
-    padding: 16px;
-    box-shadow: 0 4px 14px rgba(20,39,70,.05);
-}
-
-.portal-hero {
-    background: linear-gradient(110deg,#17345d,#3269a8);
-    border-radius: 18px;
-    padding: 25px 28px;
-    color: white;
-    margin-bottom: 20px;
-}
-
-.portal-hero h1 {
-    color: white;
-    font-size: 28px;
-    margin: 0 0 7px 0;
-}
-
-.portal-hero p {
-    color: #e4efff;
-    margin: 0;
-}
-
-div.stButton > button,
-div.stFormSubmitButton > button {
-    border-radius: 9px;
-    min-height: 40px;
-    font-weight: 600;
-}
-
-.section-note {
-    background: #edf4ff;
-    border-left: 4px solid #3976bd;
-    padding: 12px 15px;
-    border-radius: 7px;
-    margin: 8px 0 16px 0;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
-def banner(title, subtitle):
-    st.markdown(
-        f"""
-        <div class="portal-hero">
-            <h1>{title}</h1>
-            <p>{subtitle}</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
-# DATABASE FUNCTIONS
-# ============================================================
-
-def db_connection():
+def connect_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    con = sqlite3.connect(DB_PATH, timeout=30)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
+    con = sqlite3.connect(
+        DB_PATH,
+        timeout=30
+    )
 
+    con.row_factory = sqlite3.Row
     return con
 
 
-def db_execute(sql, params=()):
-    con = db_connection()
+def execute(sql, params=()):
+    con = connect_db()
 
     try:
         cur = con.execute(sql, params)
         con.commit()
         return cur.lastrowid
-
     finally:
         con.close()
 
 
-def db_all(sql, params=()):
-    con = db_connection()
+def fetch_all(sql, params=()):
+    con = connect_db()
 
     try:
         return [
             dict(row)
             for row in con.execute(sql, params).fetchall()
         ]
-
     finally:
         con.close()
 
 
-def db_one(sql, params=()):
-    rows = db_all(sql, params)
+def fetch_one(sql, params=()):
+    rows = fetch_all(sql, params)
     return rows[0] if rows else None
 
 
-def total(sql, params=()):
-    row = db_one(sql, params)
-    return int(row["n"]) if row else 0
+def count_rows(sql, params=()):
+    row = fetch_one(sql, params)
+    return row["total"] if row else 0
 
 
-def timestamp():
+def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def password_hash(password):
-    salt = "cse-placement-portal-v1"
-
+def hash_password(password):
     return hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
-        salt.encode("utf-8"),
+        b"cse-placement-portal-v1",
         180000
     ).hex()
 
 
-def init_db():
+def initialize_database():
 
-    con = db_connection()
+    con = connect_db()
 
     try:
 
@@ -350,8 +265,7 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             full_name TEXT NOT NULL,
-            role TEXT NOT NULL
-                CHECK(role IN ('student','mentor')),
+            role TEXT NOT NULL,
             academic_year TEXT DEFAULT 'First Year',
             branch TEXT DEFAULT 'CSE',
             created_at TEXT NOT NULL
@@ -361,7 +275,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id INTEGER NOT NULL,
             task_key TEXT NOT NULL,
-            completed INTEGER NOT NULL DEFAULT 0,
+            completed INTEGER DEFAULT 0,
             UNIQUE(student_id, task_key)
         );
 
@@ -420,65 +334,78 @@ def init_db():
     finally:
         con.close()
 
-    default_user = os.getenv(
+    default_username = os.getenv(
         "PORTAL_MENTOR_USERNAME",
         "mentor"
     )
 
-    default_pass = os.getenv(
+    default_password = os.getenv(
         "PORTAL_MENTOR_PASSWORD",
         "Mentor@123"
     )
 
-    existing = db_one(
+    existing = fetch_one(
         "SELECT id FROM users WHERE username=?",
-        (default_user,)
+        (default_username,)
     )
 
     if not existing:
 
-        db_execute(
+        execute(
             """
             INSERT INTO users
-            (username,password_hash,full_name,role,created_at)
-            VALUES(?,?,?,'mentor',?)
+            (
+                username,
+                password_hash,
+                full_name,
+                role,
+                created_at
+            )
+            VALUES (?, ?, ?, 'mentor', ?)
             """,
             (
-                default_user,
-                password_hash(default_pass),
+                default_username,
+                hash_password(default_password),
                 "Placement Mentor",
-                timestamp()
+                now()
             )
         )
 
 
 # ============================================================
-# REGISTRATION AND LOGIN
+# COMMON PAGE HEADER
+# Native Streamlit only - no custom HTML/CSS
 # ============================================================
 
-def register_user(role):
+def page_header(title, description):
 
-    is_student = role == "student"
+    st.title(title)
+    st.caption(description)
+    st.divider()
 
-    title = (
+
+# ============================================================
+# REGISTRATION
+# ============================================================
+
+def registration(role):
+
+    st.subheader(
         "Student Registration"
-        if is_student
+        if role == "student"
         else "Mentor Registration"
     )
 
-    st.subheader(title)
-
     with st.form(
-        f"{role}_registration_form",
+        f"registration_{role}",
         clear_on_submit=True
     ):
 
         full_name = st.text_input("Full Name")
-
-        username = st.text_input("Create Username")
+        username = st.text_input("Username")
 
         password = st.text_input(
-            "Create Password",
+            "Password",
             type="password"
         )
 
@@ -490,7 +417,7 @@ def register_user(role):
         academic_year = "First Year"
         branch = "CSE"
 
-        if is_student:
+        if role == "student":
 
             academic_year = st.selectbox(
                 "Academic Year",
@@ -505,47 +432,34 @@ def register_user(role):
         else:
 
             st.info(
-                "Mentor accounts receive mentor permissions. "
-                "Only authorised mentors should register."
+                "Only authorised mentors should create mentor accounts."
             )
 
         submitted = st.form_submit_button(
-            f"Create {role.title()} Account",
+            "Create Account",
             type="primary",
             use_container_width=True
         )
 
     if submitted:
 
-        if (
-            not full_name.strip()
-            or not username.strip()
-            or not password
-        ):
-
+        if not full_name.strip() or not username.strip() or not password:
             st.error("Please complete all required fields.")
 
         elif len(username.strip()) < 3:
-
-            st.error(
-                "Username must contain at least 3 characters."
-            )
+            st.error("Username must contain at least 3 characters.")
 
         elif len(password) < 8:
-
-            st.error(
-                "Password must contain at least 8 characters."
-            )
+            st.error("Password must contain at least 8 characters.")
 
         elif password != confirm:
-
             st.error("Passwords do not match.")
 
         else:
 
             try:
 
-                db_execute(
+                execute(
                     """
                     INSERT INTO users
                     (
@@ -557,43 +471,48 @@ def register_user(role):
                         branch,
                         created_at
                     )
-                    VALUES(?,?,?,?,?,?,?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         username.strip(),
-                        password_hash(password),
+                        hash_password(password),
                         full_name.strip(),
                         role,
                         academic_year,
                         branch.strip(),
-                        timestamp()
+                        now()
                     )
                 )
 
                 st.success(
-                    f"{title} completed. You can now sign in."
+                    "Account created successfully. Please sign in."
                 )
 
             except sqlite3.IntegrityError:
 
-                st.error(
-                    "That username is already registered."
-                )
+                st.error("This username is already registered.")
 
+
+# ============================================================
+# LOGIN
+# ============================================================
 
 def login_page():
 
-    banner(
-        "CSE Placement Roadmap & Mentorship Portal",
-        "A structured workspace for placement preparation, "
-        "mentorship and progress tracking."
+    st.title("🎓 CSE Placement Roadmap & Mentorship Portal")
+
+    st.write(
+        "A complete platform for placement preparation, "
+        "student development and mentor guidance."
     )
 
-    left, center, right = st.columns([1, 1.35, 1])
+    st.divider()
+
+    _, center, _ = st.columns([1, 1.5, 1])
 
     with center:
 
-        login_tab, student_tab, mentor_tab = st.tabs(
+        sign_in, student_reg, mentor_reg = st.tabs(
             [
                 "Sign In",
                 "Student Registration",
@@ -601,7 +520,7 @@ def login_page():
             ]
         )
 
-        with login_tab:
+        with sign_in:
 
             with st.form("login_form"):
 
@@ -620,14 +539,15 @@ def login_page():
 
             if submitted:
 
-                user = db_one(
+                user = fetch_one(
                     """
-                    SELECT * FROM users
+                    SELECT *
+                    FROM users
                     WHERE username=? AND password_hash=?
                     """,
                     (
                         username.strip(),
-                        password_hash(password)
+                        hash_password(password)
                     )
                 )
 
@@ -640,22 +560,22 @@ def login_page():
 
                     st.error("Invalid username or password.")
 
-            st.caption(
-                "Default mentor account: mentor / Mentor@123"
+            st.info(
+                "Default mentor login: mentor / Mentor@123"
             )
 
-        with student_tab:
-            register_user("student")
+        with student_reg:
+            registration("student")
 
-        with mentor_tab:
-            register_user("mentor")
+        with mentor_reg:
+            registration("mentor")
 
 
 # ============================================================
-# TASK PROGRESS
+# STUDENT TASK PROGRESS
 # ============================================================
 
-def task_progress(student_id, year):
+def get_task_progress(student_id, year):
 
     keys = [
         f"{year}|{category}|{task}"
@@ -663,25 +583,26 @@ def task_progress(student_id, year):
         for task in tasks
     ]
 
-    completed = db_all(
+    rows = fetch_all(
         """
-        SELECT task_key FROM tasks
+        SELECT task_key
+        FROM tasks
         WHERE student_id=? AND completed=1
         """,
         (student_id,)
     )
 
-    done = {
+    completed = {
         row["task_key"]
-        for row in completed
+        for row in rows
     }
 
-    count_done = sum(
-        key in done
+    done = sum(
+        key in completed
         for key in keys
     )
 
-    return count_done, len(keys), done
+    return done, len(keys), completed
 
 
 # ============================================================
@@ -690,37 +611,34 @@ def task_progress(student_id, year):
 
 def student_dashboard(user):
 
-    year = user.get("academic_year") or "First Year"
+    page_header(
+        f"Welcome, {user['full_name']}",
+        "Your placement preparation dashboard."
+    )
+
+    year = user["academic_year"] or "First Year"
 
     if year not in ROADMAP:
         year = "First Year"
 
-    done, task_count, _ = task_progress(
+    done, total_tasks, _ = get_task_progress(
         user["id"],
         year
     )
 
-    q_count = total(
-        """
-        SELECT COUNT(*) AS n
-        FROM questions
-        WHERE student_id=?
-        """,
+    questions = count_rows(
+        "SELECT COUNT(*) AS total FROM questions WHERE student_id=?",
         (user["id"],)
     )
 
-    app_count = total(
-        """
-        SELECT COUNT(*) AS n
-        FROM applications
-        WHERE student_id=?
-        """,
+    applications = count_rows(
+        "SELECT COUNT(*) AS total FROM applications WHERE student_id=?",
         (user["id"],)
     )
 
-    last = db_one(
+    latest = fetch_one(
         """
-        SELECT score,result,created_at
+        SELECT score, result, created_at
         FROM assessments
         WHERE student_id=?
         ORDER BY id DESC
@@ -729,98 +647,77 @@ def student_dashboard(user):
         (user["id"],)
     )
 
-    banner(
-        f"Welcome, {user['full_name']}",
-        "Your placement preparation overview."
-    )
-
     c1, c2, c3, c4 = st.columns(4)
 
-    c1.metric(
-        "Roadmap Tasks",
-        f"{done}/{task_count}"
-    )
+    c1.metric("Roadmap Tasks", f"{done}/{total_tasks}")
 
     c2.metric(
-        "Task Completion",
-        f"{(done / task_count * 100) if task_count else 0:.0f}%"
+        "Completion",
+        f"{done / total_tasks * 100:.0f}%"
+        if total_tasks else "0%"
     )
 
-    c3.metric(
-        "Mentor Questions",
-        q_count
-    )
+    c3.metric("Mentor Questions", questions)
 
-    c4.metric(
-        "Job Applications",
-        app_count
-    )
+    c4.metric("Applications", applications)
 
-    st.subheader("Your Learning Progress")
+    st.subheader("Learning Progress")
 
     st.progress(
-        done / task_count if task_count else 0
+        done / total_tasks
+        if total_tasks else 0
     )
 
-    st.caption(
-        f"{done} of {task_count} tasks completed for {year}."
+    st.write(
+        f"Completed {done} of {total_tasks} tasks."
     )
 
     left, right = st.columns(2)
 
     with left:
 
-        st.subheader("Next Steps")
+        st.subheader("Pending Activities")
 
-        _, _, completed_keys = task_progress(
+        _, _, completed = get_task_progress(
             user["id"],
             year
         )
 
         pending = [
-            (category, task)
+            task
             for category, tasks in ROADMAP[year].items()
             for task in tasks
-            if f"{year}|{category}|{task}" not in completed_keys
+            if f"{year}|{category}|{task}" not in completed
         ]
 
         if pending:
 
-            for category, task in pending[:6]:
-
-                st.write(
-                    f"**{category}** · {task}"
-                )
+            for task in pending[:6]:
+                st.write("•", task)
 
         else:
 
-            st.success(
-                "You have completed this year's roadmap."
-            )
+            st.success("All roadmap tasks completed.")
 
     with right:
 
         st.subheader("Latest Readiness Assessment")
 
-        if last:
+        if latest:
 
             st.metric(
                 "Readiness Score",
-                f"{last['score']}/100"
+                f"{latest['score']}/100"
             )
 
-            st.write(
-                f"**Result:** {last['result']}"
-            )
+            st.write(latest["result"])
 
-            st.caption(
-                f"Assessed on {last['created_at']}"
-            )
+            st.caption(latest["created_at"])
 
         else:
 
             st.info(
-                "Complete your first placement readiness assessment."
+                "Complete your readiness assessment to see your result."
             )
 
 
@@ -830,40 +727,38 @@ def student_dashboard(user):
 
 def roadmap_page(user):
 
-    banner(
+    page_header(
         "Placement Roadmap",
-        "Choose an academic year and track each preparation activity."
+        "Follow the learning plan and mark activities as completed."
     )
 
     year = st.selectbox(
-        "Academic Year",
+        "Select Academic Year",
         YEARS,
         index=(
-            YEARS.index(user.get("academic_year", "First Year"))
-            if user.get("academic_year", "First Year") in YEARS
-            else 0
+            YEARS.index(user["academic_year"])
+            if user["academic_year"] in YEARS else 0
         )
     )
 
-    done, count, completed = task_progress(
+    done, total_tasks, completed = get_task_progress(
         user["id"],
         year
     )
 
-    a, b = st.columns(2)
+    c1, c2 = st.columns(2)
 
-    a.metric(
-        "Completed",
-        f"{done}/{count}"
-    )
+    c1.metric("Completed Tasks", f"{done}/{total_tasks}")
 
-    b.metric(
+    c2.metric(
         "Progress",
-        f"{(done/count*100) if count else 0:.1f}%"
+        f"{done / total_tasks * 100:.1f}%"
+        if total_tasks else "0%"
     )
 
     st.progress(
-        done / count if count else 0
+        done / total_tasks
+        if total_tasks else 0
     )
 
     for category, tasks in ROADMAP[year].items():
@@ -877,38 +772,32 @@ def roadmap_page(user):
             checked = st.checkbox(
                 task,
                 value=key in completed,
-                key=f"roadmap_{user['id']}_{key}"
+                key=f"task_{user['id']}_{key}"
             )
 
             if checked != (key in completed):
 
                 if checked:
 
-                    db_execute(
+                    execute(
                         """
                         INSERT INTO tasks
-                        (student_id,task_key,completed)
-                        VALUES(?,?,1)
-                        ON CONFLICT(student_id,task_key)
+                        (student_id, task_key, completed)
+                        VALUES (?, ?, 1)
+                        ON CONFLICT(student_id, task_key)
                         DO UPDATE SET completed=1
                         """,
-                        (
-                            user["id"],
-                            key
-                        )
+                        (user["id"], key)
                     )
 
                 else:
 
-                    db_execute(
+                    execute(
                         """
                         DELETE FROM tasks
                         WHERE student_id=? AND task_key=?
                         """,
-                        (
-                            user["id"],
-                            key
-                        )
+                        (user["id"], key)
                     )
 
                 st.rerun()
@@ -917,85 +806,66 @@ def roadmap_page(user):
 
 
 # ============================================================
-# PLACEMENT READINESS ASSESSMENT
+# READINESS ASSESSMENT
 # ============================================================
 
-def classify_readiness(score):
+def readiness_label(score):
 
     if score >= 80:
         return "Placement Ready"
 
-    if score >= 60:
+    elif score >= 60:
         return "Developing Well"
 
-    if score >= 40:
+    elif score >= 40:
         return "Needs Focus"
 
     return "Early Preparation"
 
 
-def assessment_recommendations(scores):
+def assessment_advice(scores):
 
     advice = {
-
-        "Coding":
-            "Practise one or two coding problems daily and explain your approach.",
-
-        "DSA":
-            "Revise arrays, strings, linked lists, stacks, queues, trees and sorting.",
-
-        "Technical Skills":
-            "Revise DBMS, OOP, operating systems and computer networks.",
-
-        "Projects":
-            "Strengthen project functionality, documentation and your explanation.",
-
-        "Communication":
-            "Practise self-introduction, project explanation and mock interviews.",
-
-        "Aptitude":
-            "Practise timed quantitative, logical and verbal questions.",
-
-        "Resume":
-            "Improve project descriptions, skills, links and measurable achievements."
+        "Coding": "Practise coding problems daily and explain your approach.",
+        "DSA": "Revise arrays, strings, linked lists, stacks, queues and trees.",
+        "Technical Skills": "Revise DBMS, OOP, operating systems and networks.",
+        "Projects": "Improve project functionality and documentation.",
+        "Communication": "Practise self-introduction and mock interviews.",
+        "Aptitude": "Practise quantitative and logical reasoning tests.",
+        "Resume": "Improve project descriptions, skills and achievements."
     }
 
-    weak = sorted(
+    weakest = sorted(
         scores.items(),
-        key=lambda item: item[1]
+        key=lambda x: x[1]
     )[:3]
 
     return [
         (skill, value, advice[skill])
-        for skill, value in weak
+        for skill, value in weakest
         if value < 70
     ]
 
 
 def readiness_page(user):
 
-    banner(
+    page_header(
         "Placement Readiness Assessment",
-        "Evaluate your current preparation and identify "
-        "the skills that need attention."
+        "Assess your skills and review your previous performance."
     )
 
     st.info(
-        "Enter honest scores from 0 to 100. "
-        "This assessment is a preparation indicator, "
-        "not a guarantee of placement."
+        "Rate each skill honestly from 0 to 100. "
+        "The result is a preparation indicator, not a placement guarantee."
     )
 
-    with st.form("readiness_assessment_form"):
+    with st.form("assessment_form"):
 
         left, right = st.columns(2)
 
         with left:
 
-            coding = st.slider(
-                "Coding",
-                0, 100, 50
-            )
+            coding = st.slider("Coding", 0, 100, 50)
 
             dsa = st.slider(
                 "Data Structures & Algorithms",
@@ -1052,26 +922,28 @@ def readiness_page(user):
             "Resume": resume
         }
 
-        weighted = (
-            coding * .20
-            + dsa * .20
-            + technical * .20
-            + projects * .10
-            + communication * .10
-            + aptitude * .10
-            + resume * .10
+        weighted_score = (
+            coding * 0.20
+            + dsa * 0.20
+            + technical * 0.20
+            + projects * 0.10
+            + communication * 0.10
+            + aptitude * 0.10
+            + resume * 0.10
         )
 
         score = round(
             min(
                 100,
-                weighted + (3 if internship == "Yes" else 0)
+                weighted_score + (
+                    3 if internship == "Yes" else 0
+                )
             )
         )
 
-        result = classify_readiness(score)
+        result = readiness_label(score)
 
-        db_execute(
+        execute(
             """
             INSERT INTO assessments
             (
@@ -1088,7 +960,7 @@ def readiness_page(user):
                 result,
                 created_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user["id"],
@@ -1102,21 +974,20 @@ def readiness_page(user):
                 internship,
                 score,
                 result,
-                timestamp()
+                now()
             )
         )
 
-        st.session_state["latest_assessment"] = {
+        st.session_state["assessment_result"] = {
             "scores": scores,
             "score": score,
             "result": result
         }
 
-    latest = st.session_state.get(
-        "latest_assessment"
-    )
+        st.success("Assessment saved successfully.")
 
-    saved_latest = db_one(
+    # Display latest saved result
+    latest = fetch_one(
         """
         SELECT *
         FROM assessments
@@ -1127,55 +998,44 @@ def readiness_page(user):
         (user["id"],)
     )
 
-    if latest and saved_latest:
-
-        scores = latest["scores"]
-        score = latest["score"]
-        result = latest["result"]
-
-    elif saved_latest:
+    if latest:
 
         scores = {
-            "Coding": saved_latest["coding"],
-            "DSA": saved_latest["dsa"],
-            "Technical Skills": saved_latest["technical"],
-            "Projects": saved_latest["projects"],
-            "Communication": saved_latest["communication"],
-            "Aptitude": saved_latest["aptitude"],
-            "Resume": saved_latest["resume"]
+            "Coding": latest["coding"],
+            "DSA": latest["dsa"],
+            "Technical Skills": latest["technical"],
+            "Projects": latest["projects"],
+            "Communication": latest["communication"],
+            "Aptitude": latest["aptitude"],
+            "Resume": latest["resume"]
         }
-
-        score = saved_latest["score"]
-        result = saved_latest["result"]
-
-    else:
-
-        scores = None
-
-    if scores:
 
         st.divider()
 
-        st.subheader("Your Assessment Result")
+        st.subheader("Latest Assessment Result")
 
-        c1, c2 = st.columns([1, 2])
+        col1, col2 = st.columns([1, 2])
 
-        with c1:
+        with col1:
 
             st.metric(
                 "Readiness Score",
-                f"{score}/100"
+                f"{latest['score']}/100"
             )
 
             st.write(
-                f"**Assessment Level:** {result}"
+                f"**Assessment Level:** {latest['result']}"
             )
 
-            st.progress(score / 100)
+            st.progress(latest["score"] / 100)
 
-        with c2:
+            st.caption(
+                f"Date: {latest['created_at']}"
+            )
 
-            chart_df = pd.DataFrame(
+        with col2:
+
+            chart_data = pd.DataFrame(
                 {
                     "Skill": list(scores.keys()),
                     "Score": list(scores.values())
@@ -1183,72 +1043,49 @@ def readiness_page(user):
             ).set_index("Skill")
 
             st.bar_chart(
-                chart_df,
-                y="Score",
-                height=260
+                chart_data,
+                y="Score"
             )
 
-        recommendations = assessment_recommendations(
-            scores
-        )
+        st.subheader("Personal Improvement Plan")
 
-        st.subheader(
-            "Recommended Improvement Plan"
-        )
+        recommendations = assessment_advice(scores)
 
         if recommendations:
 
-            for skill, value, suggestion in recommendations:
+            for skill, value, advice in recommendations:
 
                 st.markdown(
-                    f"**{skill} — {value}/100**"
+                    f"**{skill}: {value}/100**"
                 )
 
-                st.write(suggestion)
+                st.write(advice)
 
         else:
 
             st.success(
                 "All assessed skills are at 70 or above. "
-                "Maintain your preparation."
+                "Continue practising."
             )
 
     else:
 
         st.info(
-            "Submit the assessment to view your score, "
-            "skill chart and improvement plan."
+            "Submit your first assessment to see your results."
         )
 
-    # --------------------------------------------------------
-    # PREVIOUS ASSESSMENT HISTORY
-    # --------------------------------------------------------
-
+    # Previous assessment history
     st.divider()
 
-    st.subheader(
-        "Previous Assessment History"
-    )
+    st.subheader("Previous Assessment History")
 
-    history = db_all(
+    history = fetch_all(
         """
-        SELECT
-            id,
-            score,
-            result,
-            coding,
-            dsa,
-            technical,
-            projects,
-            communication,
-            aptitude,
-            resume,
-            internship,
-            created_at
+        SELECT *
         FROM assessments
         WHERE student_id=?
         ORDER BY id DESC
-        LIMIT 20
+        LIMIT 50
         """,
         (user["id"],)
     )
@@ -1257,36 +1094,36 @@ def readiness_page(user):
 
         history_df = pd.DataFrame(history)
 
-        display_df = history_df[
+        display = history_df[
             ["created_at", "score", "result"]
         ].rename(
             columns={
-                "created_at": "Date",
+                "created_at": "Assessment Date",
                 "score": "Score / 100",
                 "result": "Assessment Level"
             }
         )
 
         st.dataframe(
-            display_df,
+            display,
             use_container_width=True,
             hide_index=True
         )
 
         st.download_button(
-            "Download Assessment History CSV",
+            "Download Assessment History",
             history_df.to_csv(index=False).encode("utf-8"),
-            file_name="my_assessment_history.csv",
+            file_name="assessment_history.csv",
             mime="text/csv"
         )
 
         selected_id = st.selectbox(
-            "View assessment details",
+            "View Previous Assessment",
             [row["id"] for row in history],
             format_func=lambda value: next(
                 (
-                    f"Assessment #{r['id']} · "
-                    f"{r['created_at']} · {r['score']}/100"
+                    f"Assessment #{r['id']} - "
+                    f"{r['created_at']} - {r['score']}/100"
                 )
                 for r in history
                 if r["id"] == value
@@ -1299,7 +1136,15 @@ def readiness_page(user):
             if row["id"] == selected_id
         )
 
-        detail_scores = {
+        st.write(
+            f"**Score:** {selected['score']}/100"
+        )
+
+        st.write(
+            f"**Result:** {selected['result']}"
+        )
+
+        detail = {
             "Coding": selected["coding"],
             "DSA": selected["dsa"],
             "Technical Skills": selected["technical"],
@@ -1309,29 +1154,18 @@ def readiness_page(user):
             "Resume": selected["resume"]
         }
 
-        st.write(
-            f"**Result:** {selected['result']} · "
-            f"**Score:** {selected['score']}/100"
-        )
-
         detail_df = pd.DataFrame(
             {
-                "Skill": list(detail_scores.keys()),
-                "Score": list(detail_scores.values())
+                "Skill": list(detail.keys()),
+                "Score": list(detail.values())
             }
         ).set_index("Skill")
 
-        st.bar_chart(
-            detail_df,
-            y="Score"
-        )
+        st.bar_chart(detail_df, y="Score")
 
     else:
 
-        st.info(
-            "Your assessment history will appear here "
-            "after your first submission."
-        )
+        st.info("No previous assessments found.")
 
 
 # ============================================================
@@ -1340,15 +1174,15 @@ def readiness_page(user):
 
 def ask_mentor_page(user):
 
-    banner(
+    page_header(
         "Ask a Mentor",
-        "Send a placement or career question to the mentor team."
+        "Submit questions and receive guidance from your mentor."
     )
 
     with st.form("ask_mentor_form"):
 
         topic = st.selectbox(
-            "Question Topic",
+            "Topic",
             [
                 "Programming",
                 "DSA",
@@ -1376,42 +1210,34 @@ def ask_mentor_page(user):
 
         if not question.strip():
 
-            st.error(
-                "Please enter your question."
-            )
+            st.error("Please enter your question.")
 
         else:
 
-            db_execute(
+            execute(
                 """
                 INSERT INTO questions
-                (student_id,question,topic,asked_at)
-                VALUES(?,?,?,?)
+                (student_id, question, topic, asked_at)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     user["id"],
                     question.strip(),
                     topic,
-                    timestamp()
+                    now()
                 )
             )
 
-            st.success(
-                "Your question has been sent."
-            )
-
+            st.success("Your question has been submitted.")
             st.rerun()
 
     st.subheader("My Questions")
 
-    rows = db_all(
+    rows = fetch_all(
         """
-        SELECT
-            q.*,
-            u.full_name AS mentor_name
+        SELECT q.*, u.full_name AS mentor_name
         FROM questions q
-        LEFT JOIN users u
-            ON u.id=q.mentor_id
+        LEFT JOIN users u ON u.id=q.mentor_id
         WHERE q.student_id=?
         ORDER BY q.id DESC
         """,
@@ -1419,10 +1245,7 @@ def ask_mentor_page(user):
     )
 
     if not rows:
-
-        st.info(
-            "You have not submitted any questions yet."
-        )
+        st.info("You have not submitted any questions.")
 
     for row in rows:
 
@@ -1437,34 +1260,31 @@ def ask_mentor_page(user):
 
             if row["answer"]:
 
-                st.success("Mentor response")
+                st.success("Mentor Response")
 
                 st.write(row["answer"])
 
                 st.caption(
-                    f"Answered by {row['mentor_name'] or 'Mentor'} "
-                    f"· {row['answered_at']}"
+                    f"Answered by {row['mentor_name'] or 'Mentor'}"
                 )
 
             else:
 
-                st.warning(
-                    "Awaiting mentor response."
-                )
+                st.warning("Awaiting mentor response.")
 
 
 # ============================================================
-# STUDENT FEEDBACK ABOUT MENTOR RESPONSES
+# STUDENT FEEDBACK ABOUT MENTOR
 # ============================================================
 
 def student_feedback_page(user):
 
-    banner(
+    page_header(
         "Student Feedback",
-        "Rate the guidance you received from your mentor."
+        "Share your feedback about the mentor guidance you received."
     )
 
-    rows = db_all(
+    rows = fetch_all(
         """
         SELECT
             q.id,
@@ -1489,8 +1309,7 @@ def student_feedback_page(user):
     if not rows:
 
         st.info(
-            "Feedback forms appear here after a mentor "
-            "answers one of your questions."
+            "You can submit feedback after your mentor answers a question."
         )
 
         return
@@ -1503,10 +1322,10 @@ def student_feedback_page(user):
                 f"Question #{row['id']} · {row['topic']}"
             )
 
-            st.write("**Your question**")
+            st.write("**Your Question**")
             st.write(row["question"])
 
-            st.write("**Mentor response**")
+            st.write("**Mentor Response**")
             st.write(row["answer"])
 
             if row["feedback_id"]:
@@ -1525,13 +1344,13 @@ def student_feedback_page(user):
                 ):
 
                     rating = st.select_slider(
-                        "Rate this mentor response",
+                        "Rate this response",
                         options=[1, 2, 3, 4, 5],
                         value=5
                     )
 
                     comment = st.text_area(
-                        "Feedback (optional)"
+                        "Your Feedback (optional)"
                     )
 
                     submitted = st.form_submit_button(
@@ -1540,7 +1359,7 @@ def student_feedback_page(user):
 
                 if submitted:
 
-                    db_execute(
+                    execute(
                         """
                         INSERT INTO feedback
                         (
@@ -1552,7 +1371,7 @@ def student_feedback_page(user):
                             comment,
                             created_at
                         )
-                        VALUES(
+                        VALUES (
                             'student_to_mentor',
                             ?,
                             NULL,
@@ -1567,15 +1386,63 @@ def student_feedback_page(user):
                             row["id"],
                             rating,
                             comment.strip(),
-                            timestamp()
+                            now()
                         )
                     )
 
-                    st.success(
-                        "Thank you. Your feedback has been saved."
-                    )
-
+                    st.success("Feedback saved.")
                     st.rerun()
+
+
+# ============================================================
+# FEEDBACK FROM MENTOR TO STUDENT
+# ============================================================
+
+def student_mentor_feedback_page(user):
+
+    page_header(
+        "Feedback From Your Mentor",
+        "Review improvement suggestions shared by your mentor."
+    )
+
+    rows = fetch_all(
+        """
+        SELECT
+            f.rating,
+            f.comment,
+            f.created_at,
+            u.full_name
+        FROM feedback f
+        JOIN users u ON u.id=f.mentor_id
+        WHERE
+            f.feedback_type='mentor_to_student'
+            AND f.student_id=?
+        ORDER BY f.id DESC
+        """,
+        (user["id"],)
+    )
+
+    if not rows:
+
+        st.info(
+            "Your mentor feedback will appear here."
+        )
+
+        return
+
+    for row in rows:
+
+        with st.container(border=True):
+
+            st.caption(
+                f"{row['created_at']} · Mentor: {row['full_name']}"
+            )
+
+            st.write(
+                f"**Progress Rating:** {row['rating']}/5"
+            )
+
+            st.write(row["comment"])
 
 
 # ============================================================
@@ -1584,9 +1451,9 @@ def student_feedback_page(user):
 
 def placement_tracker(user):
 
-    banner(
+    page_header(
         "Placement Tracker",
-        "Record applications and follow each recruitment stage."
+        "Track company applications and recruitment progress."
     )
 
     with st.form(
@@ -1598,13 +1465,8 @@ def placement_tracker(user):
 
         with col1:
 
-            company = st.text_input(
-                "Company Name"
-            )
-
-            role = st.text_input(
-                "Job Role"
-            )
+            company = st.text_input("Company Name")
+            role = st.text_input("Job Role")
 
         with col2:
 
@@ -1613,9 +1475,7 @@ def placement_tracker(user):
                 STATUSES
             )
 
-            notes = st.text_input(
-                "Notes (optional)"
-            )
+            notes = st.text_input("Notes")
 
         submitted = st.form_submit_button(
             "Add Application",
@@ -1626,13 +1486,11 @@ def placement_tracker(user):
 
         if not company.strip() or not role.strip():
 
-            st.error(
-                "Company name and job role are required."
-            )
+            st.error("Enter company and job role.")
 
         else:
 
-            db_execute(
+            execute(
                 """
                 INSERT INTO applications
                 (
@@ -1643,25 +1501,22 @@ def placement_tracker(user):
                     applied_at,
                     notes
                 )
-                VALUES(?,?,?,?,?,?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user["id"],
                     company.strip(),
                     role.strip(),
                     status,
-                    timestamp(),
+                    now(),
                     notes.strip()
                 )
             )
 
-            st.success(
-                "Application saved."
-            )
-
+            st.success("Application added.")
             st.rerun()
 
-    rows = db_all(
+    rows = fetch_all(
         """
         SELECT *
         FROM applications
@@ -1671,126 +1526,108 @@ def placement_tracker(user):
         (user["id"],)
     )
 
-    if rows:
+    if not rows:
 
-        df = pd.DataFrame(rows)
+        st.info("No applications added yet.")
+        return
 
-        st.dataframe(
-            df[
-                [
-                    "company",
-                    "role",
-                    "status",
-                    "applied_at",
-                    "notes"
-                ]
-            ].rename(
-                columns={
-                    "company": "Company",
-                    "role": "Role",
-                    "status": "Status",
-                    "applied_at": "Applied At",
-                    "notes": "Notes"
-                }
-            ),
-            use_container_width=True,
-            hide_index=True
+    df = pd.DataFrame(rows)
+
+    st.dataframe(
+        df[
+            [
+                "company",
+                "role",
+                "status",
+                "applied_at",
+                "notes"
+            ]
+        ].rename(
+            columns={
+                "company": "Company",
+                "role": "Role",
+                "status": "Status",
+                "applied_at": "Applied Date",
+                "notes": "Notes"
+            }
+        ),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.download_button(
+        "Download Applications CSV",
+        df.to_csv(index=False).encode("utf-8"),
+        file_name="placement_applications.csv",
+        mime="text/csv"
+    )
+
+    st.subheader("Update Application")
+
+    selected_id = st.selectbox(
+        "Select Application",
+        [row["id"] for row in rows],
+        format_func=lambda value: next(
+            f"{r['company']} - {r['role']}"
+            for r in rows
+            if r["id"] == value
         )
+    )
 
-        st.download_button(
-            "Download Applications CSV",
-            df.to_csv(index=False).encode("utf-8"),
-            file_name="placement_applications.csv",
-            mime="text/csv"
+    selected = next(
+        row
+        for row in rows
+        if row["id"] == selected_id
+    )
+
+    new_status = st.selectbox(
+        "New Status",
+        STATUSES,
+        index=(
+            STATUSES.index(selected["status"])
+            if selected["status"] in STATUSES else 0
         )
+    )
 
-        st.subheader("Update Application")
+    col1, col2 = st.columns(2)
 
-        chosen = st.selectbox(
-            "Choose application",
-            [r["id"] for r in rows],
-            format_func=lambda value: next(
+    with col1:
+
+        if st.button("Update Status", use_container_width=True):
+
+            execute(
+                """
+                UPDATE applications
+                SET status=?
+                WHERE id=? AND student_id=?
+                """,
                 (
-                    f"#{r['id']} · "
-                    f"{r['company']} · {r['role']}"
+                    new_status,
+                    selected_id,
+                    user["id"]
                 )
-                for r in rows
-                if r["id"] == value
             )
-        )
 
-        current = next(
-            r for r in rows
-            if r["id"] == chosen
-        )
+            st.success("Status updated.")
+            st.rerun()
 
-        new_status = st.selectbox(
-            "New status",
-            STATUSES,
-            index=(
-                STATUSES.index(current["status"])
-                if current["status"] in STATUSES
-                else 0
+    with col2:
+
+        if st.button("Delete Application", use_container_width=True):
+
+            execute(
+                """
+                DELETE FROM applications
+                WHERE id=? AND student_id=?
+                """,
+                (
+                    selected_id,
+                    user["id"]
+                )
             )
-        )
 
-        u1, u2 = st.columns(2)
-
-        with u1:
-
-            if st.button(
-                "Save Status",
-                use_container_width=True
-            ):
-
-                db_execute(
-                    """
-                    UPDATE applications
-                    SET status=?
-                    WHERE id=? AND student_id=?
-                    """,
-                    (
-                        new_status,
-                        chosen,
-                        user["id"]
-                    )
-                )
-
-                st.success(
-                    "Application status updated."
-                )
-
-                st.rerun()
-
-        with u2:
-
-            if st.button(
-                "Delete Application",
-                use_container_width=True
-            ):
-
-                db_execute(
-                    """
-                    DELETE FROM applications
-                    WHERE id=? AND student_id=?
-                    """,
-                    (
-                        chosen,
-                        user["id"]
-                    )
-                )
-
-                st.success(
-                    "Application deleted."
-                )
-
-                st.rerun()
-
-    else:
-
-        st.info(
-            "No applications have been added yet."
-        )
+            st.success("Application deleted.")
+            st.rerun()
 
 
 # ============================================================
@@ -1799,51 +1636,41 @@ def placement_tracker(user):
 
 def mentor_dashboard(user):
 
-    banner(
+    page_header(
         f"Welcome, {user['full_name']}",
-        "Mentor workspace · student support and placement progress."
+        "Mentor dashboard for student support and progress."
     )
 
-    students = total(
-        """
-        SELECT COUNT(*) AS n
-        FROM users
-        WHERE role='student'
-        """
+    students = count_rows(
+        "SELECT COUNT(*) AS total FROM users WHERE role='student'"
     )
 
-    question_count = total(
-        """
-        SELECT COUNT(*) AS n
-        FROM questions
-        """
+    questions = count_rows(
+        "SELECT COUNT(*) AS total FROM questions"
     )
 
-    pending = total(
+    pending = count_rows(
         """
-        SELECT COUNT(*) AS n
+        SELECT COUNT(*) AS total
         FROM questions
         WHERE answer='' OR answer IS NULL
         """
     )
 
-    feedback_count = total(
-        """
-        SELECT COUNT(*) AS n
-        FROM feedback
-        """
+    feedback_count = count_rows(
+        "SELECT COUNT(*) AS total FROM feedback"
     )
 
     a, b, c, d = st.columns(4)
 
     a.metric("Registered Students", students)
-    b.metric("Total Questions", question_count)
-    c.metric("Pending Responses", pending)
-    d.metric("Feedback Received", feedback_count)
+    b.metric("Total Questions", questions)
+    c.metric("Pending Questions", pending)
+    d.metric("Feedback Responses", feedback_count)
 
-    st.subheader("Latest Student Questions")
+    st.subheader("Recent Student Questions")
 
-    rows = db_all(
+    rows = fetch_all(
         """
         SELECT
             q.id,
@@ -1852,10 +1679,9 @@ def mentor_dashboard(user):
             q.question,
             q.asked_at
         FROM questions q
-        JOIN users u
-            ON u.id=q.student_id
+        JOIN users u ON u.id=q.student_id
         ORDER BY q.id DESC
-        LIMIT 8
+        LIMIT 10
         """
     )
 
@@ -1869,40 +1695,32 @@ def mentor_dashboard(user):
 
     else:
 
-        st.info(
-            "No student questions yet."
-        )
+        st.info("No student questions yet.")
 
 
 # ============================================================
-# MENTOR ANSWERS STUDENT QUESTIONS
+# MENTOR ANSWERS
 # ============================================================
 
 def mentor_questions_page(user):
 
-    banner(
+    page_header(
         "Student Questions",
-        "Review student questions and provide useful, actionable answers."
+        "Review questions and provide guidance."
     )
 
-    rows = db_all(
+    rows = fetch_all(
         """
-        SELECT
-            q.*,
-            u.full_name
+        SELECT q.*, u.full_name
         FROM questions q
-        JOIN users u
-            ON u.id=q.student_id
+        JOIN users u ON u.id=q.student_id
         ORDER BY q.id DESC
         """
     )
 
     if not rows:
 
-        st.info(
-            "No student questions have been submitted."
-        )
-
+        st.info("No questions submitted.")
         return
 
     for row in rows:
@@ -1910,22 +1728,19 @@ def mentor_questions_page(user):
         with st.container(border=True):
 
             st.caption(
-                f"Question #{row['id']} · "
-                f"{row['full_name']} · "
-                f"{row['topic']} · "
-                f"{row['asked_at']}"
+                f"#{row['id']} · {row['full_name']} · "
+                f"{row['topic']} · {row['asked_at']}"
             )
 
             st.write(row["question"])
 
             with st.form(
-                f"mentor_answer_{row['id']}"
+                f"answer_form_{row['id']}"
             ):
 
                 answer = st.text_area(
                     "Mentor Response",
                     value=row["answer"] or "",
-                    key=f"answer_text_{row['id']}",
                     height=110
                 )
 
@@ -1937,54 +1752,42 @@ def mentor_questions_page(user):
 
                 if not answer.strip():
 
-                    st.error(
-                        "Response cannot be empty."
-                    )
+                    st.error("Response cannot be empty.")
 
                 else:
 
-                    db_execute(
+                    execute(
                         """
                         UPDATE questions
-                        SET
-                            answer=?,
-                            mentor_id=?,
-                            answered_at=?
+                        SET answer=?, mentor_id=?, answered_at=?
                         WHERE id=?
                         """,
                         (
                             answer.strip(),
                             user["id"],
-                            timestamp(),
+                            now(),
                             row["id"]
                         )
                     )
 
-                    st.success(
-                        "Response saved."
-                    )
-
+                    st.success("Response saved.")
                     st.rerun()
 
 
 # ============================================================
-# MENTOR GIVES FEEDBACK TO STUDENTS
+# MENTOR FEEDBACK
 # ============================================================
 
 def mentor_feedback_page(user):
 
-    banner(
+    page_header(
         "Mentor Feedback",
-        "Provide constructive feedback to help students improve."
+        "Give constructive feedback to students."
     )
 
-    students = db_all(
+    students = fetch_all(
         """
-        SELECT
-            id,
-            full_name,
-            username,
-            academic_year
+        SELECT id, full_name, academic_year
         FROM users
         WHERE role='student'
         ORDER BY full_name
@@ -1993,24 +1796,18 @@ def mentor_feedback_page(user):
 
     if not students:
 
-        st.info(
-            "No students are registered yet."
-        )
-
+        st.info("No students registered.")
         return
 
     with st.form("mentor_feedback_form"):
 
         student_id = st.selectbox(
             "Select Student",
-            [r["id"] for r in students],
+            [s["id"] for s in students],
             format_func=lambda value: next(
-                (
-                    f"{r['full_name']} · "
-                    f"{r['academic_year'] or 'Year not set'}"
-                )
-                for r in students
-                if r["id"] == value
+                f"{s['full_name']} · {s['academic_year']}"
+                for s in students
+                if s["id"] == value
             )
         )
 
@@ -2041,7 +1838,7 @@ def mentor_feedback_page(user):
         )
 
         submitted = st.form_submit_button(
-            "Submit Mentor Feedback",
+            "Submit Feedback",
             type="primary"
         )
 
@@ -2049,13 +1846,11 @@ def mentor_feedback_page(user):
 
         if not comment.strip():
 
-            st.error(
-                "Please enter feedback before submitting."
-            )
+            st.error("Please enter feedback.")
 
         else:
 
-            db_execute(
+            execute(
                 """
                 INSERT INTO feedback
                 (
@@ -2067,7 +1862,7 @@ def mentor_feedback_page(user):
                     comment,
                     created_at
                 )
-                VALUES(
+                VALUES (
                     'mentor_to_student',
                     ?,
                     ?,
@@ -2082,23 +1877,18 @@ def mentor_feedback_page(user):
                     user["id"],
                     rating,
                     f"{category}: {comment.strip()}",
-                    timestamp()
+                    now()
                 )
             )
 
-            st.success(
-                "Feedback has been shared with the student."
-            )
-
+            st.success("Feedback shared with student.")
             st.rerun()
 
     st.divider()
 
-    st.subheader(
-        "Feedback Submitted by You"
-    )
+    st.subheader("Feedback Submitted by You")
 
-    given = db_all(
+    given = fetch_all(
         """
         SELECT
             f.rating,
@@ -2106,8 +1896,7 @@ def mentor_feedback_page(user):
             f.created_at,
             u.full_name
         FROM feedback f
-        JOIN users u
-            ON u.id=f.student_id
+        JOIN users u ON u.id=f.student_id
         WHERE
             f.feedback_type='mentor_to_student'
             AND f.mentor_id=?
@@ -2126,9 +1915,7 @@ def mentor_feedback_page(user):
 
     else:
 
-        st.info(
-            "Your submitted student feedback will appear here."
-        )
+        st.info("No feedback submitted yet.")
 
 
 # ============================================================
@@ -2137,12 +1924,12 @@ def mentor_feedback_page(user):
 
 def mentor_student_feedback_page():
 
-    banner(
+    page_header(
         "Student Feedback",
-        "Review ratings and comments students have submitted about mentor responses."
+        "Review feedback about mentor responses."
     )
 
-    rows = db_all(
+    rows = fetch_all(
         """
         SELECT
             f.rating,
@@ -2151,10 +1938,8 @@ def mentor_student_feedback_page():
             u.full_name,
             q.topic
         FROM feedback f
-        JOIN users u
-            ON u.id=f.student_id
-        LEFT JOIN questions q
-            ON q.id=f.question_id
+        JOIN users u ON u.id=f.student_id
+        LEFT JOIN questions q ON q.id=f.question_id
         WHERE f.feedback_type='student_to_mentor'
         ORDER BY f.id DESC
         """
@@ -2162,27 +1947,18 @@ def mentor_student_feedback_page():
 
     if not rows:
 
-        st.info(
-            "No student feedback has been submitted yet."
-        )
-
+        st.info("No student feedback received yet.")
         return
 
     average = sum(
-        r["rating"] for r in rows
+        row["rating"]
+        for row in rows
     ) / len(rows)
 
     c1, c2 = st.columns(2)
 
-    c1.metric(
-        "Average Mentor Rating",
-        f"{average:.1f}/5"
-    )
-
-    c2.metric(
-        "Feedback Responses",
-        len(rows)
-    )
+    c1.metric("Average Rating", f"{average:.1f}/5")
+    c2.metric("Feedback Received", len(rows))
 
     st.dataframe(
         pd.DataFrame(rows),
@@ -2192,17 +1968,17 @@ def mentor_student_feedback_page():
 
 
 # ============================================================
-# MENTOR VIEWS PLACEMENT OUTCOMES
+# MENTOR PLACEMENT OUTCOMES
 # ============================================================
 
 def mentor_outcomes_page():
 
-    banner(
+    page_header(
         "Placement Outcomes",
-        "Review placement applications recorded by students."
+        "Review student placement applications."
     )
 
-    rows = db_all(
+    rows = fetch_all(
         """
         SELECT
             u.full_name,
@@ -2212,18 +1988,14 @@ def mentor_outcomes_page():
             a.applied_at,
             a.notes
         FROM applications a
-        JOIN users u
-            ON u.id=a.student_id
+        JOIN users u ON u.id=a.student_id
         ORDER BY a.id DESC
         """
     )
 
     if not rows:
 
-        st.info(
-            "No placement applications are available."
-        )
-
+        st.info("No placement applications found.")
         return
 
     df = pd.DataFrame(rows)
@@ -2233,7 +2005,7 @@ def mentor_outcomes_page():
     )
 
     selected = st.selectbox(
-        "Filter by Status",
+        "Filter Application Status",
         options
     )
 
@@ -2247,7 +2019,7 @@ def mentor_outcomes_page():
     )
 
     st.download_button(
-        "Download Placement Outcomes CSV",
+        "Download Placement Outcomes",
         df.to_csv(index=False).encode("utf-8"),
         file_name="placement_outcomes.csv",
         mime="text/csv"
@@ -2255,92 +2027,34 @@ def mentor_outcomes_page():
 
 
 # ============================================================
-# STUDENT VIEWS FEEDBACK FROM MENTOR
-# ============================================================
-
-def student_mentor_feedback_view(user):
-
-    banner(
-        "Feedback From Your Mentor",
-        "Review guidance and improvement feedback shared by your mentor."
-    )
-
-    rows = db_all(
-        """
-        SELECT
-            f.rating,
-            f.comment,
-            f.created_at,
-            u.full_name
-        FROM feedback f
-        JOIN users u
-            ON u.id=f.mentor_id
-        WHERE
-            f.feedback_type='mentor_to_student'
-            AND f.student_id=?
-        ORDER BY f.id DESC
-        """,
-        (user["id"],)
-    )
-
-    if rows:
-
-        for row in rows:
-
-            with st.container(border=True):
-
-                st.caption(
-                    f"{row['created_at']} · "
-                    f"Mentor: {row['full_name']}"
-                )
-
-                st.write(
-                    f"**Progress rating:** {row['rating']}/5"
-                )
-
-                st.write(
-                    row["comment"]
-                )
-
-    else:
-
-        st.info(
-            "Your mentor's feedback will appear here "
-            "when it is shared."
-        )
-
-
-# ============================================================
-# SIDEBAR NAVIGATION
+# SIDEBAR AND APPLICATION ROUTING
 # ============================================================
 
 def main():
 
-    init_db()
+    initialize_database()
 
     if "user" not in st.session_state:
 
         login_page()
         return
 
-    user = st.session_state["user"]
-
-    fresh = db_one(
+    user = fetch_one(
         "SELECT * FROM users WHERE id=?",
-        (user["id"],)
+        (st.session_state["user"]["id"],)
     )
 
-    if not fresh:
+    if not user:
 
         st.session_state.pop("user", None)
         st.rerun()
+        return
 
-    user = fresh
     st.session_state["user"] = user
 
     with st.sidebar:
 
-        st.markdown("## 🎓 CSE PORTAL")
+        st.title("🎓 CSE PORTAL")
 
         st.write(
             f"**{user['full_name']}**"
@@ -2383,7 +2097,7 @@ def main():
         st.divider()
 
         if st.button(
-            "🚪 Logout",
+            "Logout",
             use_container_width=True
         ):
 
@@ -2393,66 +2107,39 @@ def main():
     if user["role"] == "student":
 
         routes = {
-
-            "Dashboard":
-                lambda: student_dashboard(user),
-
-            "Placement Roadmap":
-                lambda: roadmap_page(user),
-
-            "Readiness Assessment":
-                lambda: readiness_page(user),
-
-            "Ask a Mentor":
-                lambda: ask_mentor_page(user),
-
-            "Student Feedback":
-                lambda: student_feedback_page(user),
-
-            "Feedback From Mentor":
-                lambda: student_mentor_feedback_view(user),
-
-            "Placement Tracker":
-                lambda: placement_tracker(user)
+            "Dashboard": lambda: student_dashboard(user),
+            "Placement Roadmap": lambda: roadmap_page(user),
+            "Readiness Assessment": lambda: readiness_page(user),
+            "Ask a Mentor": lambda: ask_mentor_page(user),
+            "Student Feedback": lambda: student_feedback_page(user),
+            "Feedback From Mentor": lambda: student_mentor_feedback_page(user),
+            "Placement Tracker": lambda: placement_tracker(user)
         }
 
     else:
 
         routes = {
-
-            "Dashboard":
-                lambda: mentor_dashboard(user),
-
-            "Student Questions":
-                lambda: mentor_questions_page(user),
-
-            "Mentor Feedback":
-                lambda: mentor_feedback_page(user),
-
-            "Student Feedback":
-                mentor_student_feedback_page,
-
-            "Placement Outcomes":
-                mentor_outcomes_page
+            "Dashboard": lambda: mentor_dashboard(user),
+            "Student Questions": lambda: mentor_questions_page(user),
+            "Mentor Feedback": lambda: mentor_feedback_page(user),
+            "Student Feedback": mentor_student_feedback_page,
+            "Placement Outcomes": mentor_outcomes_page
         }
 
     routes[page]()
 
 
 # ============================================================
-# APPLICATION ENTRY POINT
+# RUN APPLICATION
 # ============================================================
 
 if __name__ == "__main__":
 
     try:
-
         main()
 
-    except Exception as exc:
+    except Exception as error:
 
-        st.error(
-            "The application encountered an error."
-        )
+        st.error("Application error")
 
-        st.exception(exc)
+        st.exception(error)
