@@ -876,6 +876,7 @@ def student_dashboard(user):
 # =========================================================
 
 def placement_readiness(user):
+
     banner(
         "🎯 Placement Readiness Prediction",
         "Enter your current preparation level to assess your readiness.",
@@ -889,52 +890,101 @@ def placement_readiness(user):
     left, right = st.columns(2, gap="large")
 
     with left:
-        coding = st.slider(
-            "Coding Score", 0, 100, 50
+
+        coding = st.number_input(
+            "Coding Score",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_coding",
         )
-        dsa = st.slider(
-            "DSA Score", 0, 100, 50
+
+        dsa = st.number_input(
+            "DSA Score",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_dsa",
         )
-        technical = st.slider(
-            "Technical Skills", 0, 100, 50
+
+        technical = st.number_input(
+            "Technical Skills",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_technical",
         )
-        projects = st.slider(
-            "Projects Score", 0, 100, 50
+
+        projects = st.number_input(
+            "Projects Score",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_projects",
         )
-        communication = st.slider(
-            "Communication Score", 0, 100, 50
+
+        communication = st.number_input(
+            "Communication Score",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_communication",
         )
 
     with right:
-        aptitude = st.slider(
-            "Aptitude Score", 0, 100, 50
+
+        aptitude = st.number_input(
+            "Aptitude Score",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_aptitude",
         )
 
         internship = st.selectbox(
             "Internship Experience",
             ["No", "Yes"],
+            key="readiness_internship",
         )
 
-        resume = st.slider(
-            "Resume Score", 0, 100, 50
+        resume = st.number_input(
+            "Resume Score",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=1,
+            key="readiness_resume",
         )
 
         st.markdown("### Assessment Guide")
+
         st.write("**0–39:** Needs improvement")
         st.write("**40–59:** Developing")
         st.write("**60–79:** Good preparation")
         st.write("**80–100:** Strong preparation")
 
         st.info(
-            "This is a rule-based preparation score, not a verified "
-            "probability of being hired."
+            "This is a rule-based preparation score, "
+            "not a verified probability of being hired."
         )
+
+    # =====================================================
+    # PREDICTION
+    # =====================================================
 
     if st.button(
         "🔮 Predict Placement Readiness",
         type="primary",
         use_container_width=True,
+        key="predict_readiness",
     ):
+
         score = round(
             coding * 0.20
             + aptitude * 0.15
@@ -948,42 +998,81 @@ def placement_readiness(user):
 
         score = max(0, min(100, score))
 
+        # RESULT CLASSIFICATION
+
         if score >= 80:
             result = "Strong Preparation"
-            st.success(
-                f"Placement readiness: {result}"
-            )
 
         elif score >= 60:
             result = "Good Preparation"
-            st.success(
-                f"Placement readiness: {result}"
-            )
 
         elif score >= 40:
             result = "Developing"
-            st.warning(
-                f"Placement readiness: {result}"
-            )
 
         else:
             result = "Needs Improvement"
-            st.error(
-                f"Placement readiness: {result}"
+
+        # =================================================
+        # RESULT DISPLAY
+        # =================================================
+
+        st.divider()
+        st.subheader("Your Placement Readiness Result")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric(
+                "Readiness Score",
+                f"{score}/100",
             )
 
-        col1, col2 = st.columns([1, 2])
+        with col2:
+            st.metric(
+                "Assessment",
+                result,
+            )
 
-        col1.metric(
-            "Readiness Score",
-            f"{score}/100",
+        # CUSTOM HTML PROGRESS BAR
+
+        st.markdown(
+            f"""
+            <div style="
+                width:100%;
+                background:#e5e7eb;
+                height:18px;
+                border-radius:20px;
+                overflow:hidden;
+            ">
+                <div style="
+                    width:{score}%;
+                    height:18px;
+                    background:#2563eb;
+                    border-radius:20px;
+                "></div>
+            </div>
+            <p style="text-align:right;font-weight:bold;">
+                {score}% Readiness
+            </p>
+            """,
+            unsafe_allow_html=True,
         )
 
-        col2.write(
-            f"**Assessment:** {result}"
-        )
+        if score >= 80:
+            st.success(f"Excellent! {result}")
 
-        col2.progress(score / 100)
+        elif score >= 60:
+            st.success(f"Good work! {result}")
+
+        elif score >= 40:
+            st.warning(f"Keep improving! {result}")
+
+        else:
+            st.error(f"More preparation needed: {result}")
+
+        # =================================================
+        # SKILL ANALYSIS
+        # =================================================
 
         scores = {
             "Coding": coding,
@@ -1007,16 +1096,18 @@ def placement_readiness(user):
             if 40 <= value < 60
         ]
 
-        st.subheader("Skill Analysis")
+        st.subheader("📊 Skill Analysis")
 
         if weak:
             st.error(
-                "Priority areas: " + ", ".join(weak)
+                "Priority improvement areas: "
+                + ", ".join(weak)
             )
 
         if medium:
             st.warning(
-                "Practise more: " + ", ".join(medium)
+                "Practise more in: "
+                + ", ".join(medium)
             )
 
         if not weak and not medium:
@@ -1024,7 +1115,10 @@ def placement_readiness(user):
                 "Your entered skill scores are well balanced."
             )
 
-        # Save assessment in database.
+        # =================================================
+        # SAVE ASSESSMENT IN DATABASE
+        # =================================================
+
         execute("""
             INSERT INTO assessments
             (
@@ -1061,9 +1155,13 @@ def placement_readiness(user):
             "Your assessment has been saved successfully."
         )
 
-    # Previous assessment history.
+    # =====================================================
+    # PREVIOUS ASSESSMENT HISTORY
+    # =====================================================
+
     st.divider()
-    st.subheader("Previous Assessment History")
+
+    st.subheader("📋 Previous Assessment History")
 
     history = fetch_all("""
         SELECT
@@ -1084,12 +1182,46 @@ def placement_readiness(user):
     """, (user["id"],))
 
     if history:
-        st.dataframe(
-            pd.DataFrame(history),
-            hide_index=True,
-            use_container_width=True,
-        )
+
+        for index, record in enumerate(history, start=1):
+
+            with st.expander(
+                f"Assessment {index} — {record['created_at']}"
+            ):
+
+                st.write(
+                    f"**Readiness Score:** {record['score']}/100"
+                )
+
+                st.write(
+                    f"**Result:** {record['result']}"
+                )
+
+                st.table(
+                    {
+                        "Skill": [
+                            "Coding",
+                            "Aptitude",
+                            "DSA",
+                            "Technical",
+                            "Resume",
+                            "Projects",
+                            "Communication",
+                        ],
+                        "Score": [
+                            record["coding"],
+                            record["aptitude"],
+                            record["dsa"],
+                            record["technical"],
+                            record["resume"],
+                            record["projects"],
+                            record["communication"],
+                        ],
+                    }
+                )
+
     else:
+
         st.info(
             "You have not completed any assessments yet."
         )
