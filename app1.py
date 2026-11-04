@@ -673,8 +673,28 @@ def resources_tasks_page(user):
         "Completion Progress",
         f"{progress * 100:.1f}%",
     )
+    st.markdown(
+    f"""
+    <div style="
+        background:#e5e7eb;
+        border-radius:20px;
+        height:14px;
+        width:100%;
+        overflow:hidden;
+    ">
+        <div style="
+            background:#2563eb;
+            width:{progress * 100}%;
+            height:14px;
+            border-radius:20px;
+        "></div>
+    </div>
+    <p>{progress * 100:.1f}% completed</p>
+    """,
+    unsafe_allow_html=True
+)
 
-    st.progress(progress)
+    
 
     st.caption(
         f"Resources and tasks for {year}"
