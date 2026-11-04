@@ -1,29 +1,48 @@
+
+from pathlib import Path
 import os
 import sqlite3
 import hashlib
-import traceback
-from pathlib import Path
 from datetime import datetime
-from contextlib import contextmanager
 
+import joblib
+import numpy as np
 import pandas as pd
 import streamlit as st
 
-# =========================================================
-# 1. CONFIGURATION
-# =========================================================
+# ============================================================
+# CSE PLACEMENT ROADMAP & ML MENTORSHIP PORTAL
+# Python + Streamlit + Random Forest + SQLite
+# ============================================================
 
 st.set_page_config(
     page_title="CSE Placement Roadmap & Mentorship Portal",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("PORTAL_DB_PATH", str(BASE_DIR / "placement_portal_v4.db")))
+MODEL_PATH = BASE_DIR / "placement_model.pkl"
+ENCODER_PATH = BASE_DIR / "label_encoder.pkl"
+
+FEATURE_COLUMNS = [
+    "Year",
+    "Coding_Score",
+    "DSA_Score",
+    "Technical_Skills",
+    "Projects_Score",
+    "Communication_Score",
+    "Aptitude_Score",
+    "Internship_Experience",
+    "Resume_Score",
+]
 
 YEARS = ["First Year", "Second Year", "Third Year", "Final Year"]
+
+YEAR_NUMBER = {
+    name: index for index, name in enumerate(YEARS, start=1)
+}
 
 STATUSES = [
     "Applied",
@@ -34,10 +53,6 @@ STATUSES = [
     "Rejected",
     "Offer Received",
 ]
-
-# =========================================================
-# 2. RESOURCES AND TASKS
-# =========================================================
 
 ROADMAP = {
     "First Year": {
@@ -71,9 +86,9 @@ ROADMAP = {
             "Resume preparation",
             "Technical interview preparation",
             "HR interview preparation",
-            "Mock interview practice",
         ],
     },
+
     "Second Year": {
         "Programming": [
             "Object-oriented programming",
@@ -105,9 +120,9 @@ ROADMAP = {
             "Resume preparation",
             "Internship applications",
             "Technical interview preparation",
-            "Mock interview practice",
         ],
     },
+
     "Third Year": {
         "Programming": [
             "Advanced programming practice",
@@ -138,10 +153,10 @@ ROADMAP = {
         "Placement": [
             "Resume preparation",
             "Technical interview preparation",
-            "HR interview preparation",
             "Mock interview practice",
         ],
     },
+
     "Final Year": {
         "Programming": [
             "Core programming revision",
@@ -172,114 +187,49 @@ ROADMAP = {
             "Resume preparation",
             "Technical interview preparation",
             "HR interview preparation",
-            "Mock interview practice",
             "Placement application tracking",
         ],
     },
 }
 
-# =========================================================
-# 3. STYLING
-# =========================================================
 
-st.markdown("""
-<style>
-.stApp {
-    background: #f4f7fc;
-    color: #303746;
-}
-.block-container {
-    padding-top: 1.4rem;
-    max-width: 1450px;
-}
-[data-testid="stSidebar"] {
-    background: linear-gradient(175deg, #14294f, #263e72);
-}
-[data-testid="stSidebar"] * {
-    color: #ffffff !important;
-}
-.hero {
-    background: linear-gradient(110deg, #18356b, #386bc1);
-    color: white;
-    border-radius: 17px;
-    padding: 24px 28px;
-    margin-bottom: 22px;
-}
-.hero h1 {
-    color: white !important;
-    margin: 0;
-    font-size: 28px;
-}
-.hero p {
-    color: #e2eaff;
-    margin: 8px 0 0;
-}
-[data-testid="stMetric"] {
-    background: white;
-    border: 1px solid #e4eaf4;
-    border-radius: 13px;
-    padding: 16px;
-    box-shadow: 0 3px 14px #1c37600b;
-}
-div.stButton > button {
-    border-radius: 9px;
-    min-height: 40px;
-}
-</style>
-""", unsafe_allow_html=True)
+# ============================================================
+# DATABASE FUNCTIONS
+# ============================================================
+
+def db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(DB_PATH, timeout=30)
 
 
-# =========================================================
-# 4. DATABASE FUNCTIONS
-# =========================================================
+def query(sql, params=(), one=False):
+    with db() as con:
+        con.row_factory = sqlite3.Row
+        cursor = con.execute(sql, params)
+        rows = cursor.fetchall()
+        result = [dict(row) for row in rows]
 
-@contextmanager
-def connect():
-    """Open a SQLite connection and always close it after use."""
-    con = sqlite3.connect(DB_PATH, timeout=30)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    try:
-        yield con
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
+    return (result[0] if result else None) if one else result
 
 
 def execute(sql, params=()):
-    with connect() as con:
+    with db() as con:
         con.execute(sql, params)
+        con.commit()
 
 
-def fetch_all(sql, params=()):
-    with connect() as con:
-        return [
-            dict(row)
-            for row in con.execute(sql, params).fetchall()
-        ]
-
-
-def count_rows(sql, params=()):
-    rows = fetch_all(sql, params)
-    return rows[0]["total"] if rows else 0
-
-
-def now():
+def timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def hash_password(password):
+def password_hash(password):
     return hashlib.sha256(
         password.encode("utf-8")
     ).hexdigest()
 
 
 def setup_database():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with connect() as con:
+    with db() as con:
         con.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -346,548 +296,518 @@ def setup_database():
             created_at TEXT NOT NULL
         );
         """)
-        # =========================================================
-# 5. CREATE DEFAULT MENTOR
-# =========================================================
+
+        con.commit()
+
 
 def create_default_mentor():
     username = os.getenv(
-        "PORTAL_MENTOR_USERNAME", "mentor"
-    )
-    password = os.getenv(
-        "PORTAL_MENTOR_PASSWORD", "Mentor@123"
+        "PORTAL_MENTOR_USERNAME",
+        "mentor"
     )
 
-    existing = fetch_all(
+    password = os.getenv(
+        "PORTAL_MENTOR_PASSWORD",
+        "Mentor@123"
+    )
+
+    existing = query(
         "SELECT id FROM users WHERE username=?",
         (username,),
+        one=True
     )
 
     if not existing:
-        execute("""
+        execute(
+            """
             INSERT INTO users
             (username, password_hash, full_name, role, created_at)
             VALUES (?, ?, ?, 'mentor', ?)
-        """, (
-            username,
-            hash_password(password),
-            "Placement Mentor",
-            now(),
-        ))
-
-
-# =========================================================
-# 6. COMMON BANNER
-# =========================================================
-
-def banner(title, subtitle):
-    st.markdown(
-        f"""
-        <div class="hero">
-            <h1>{title}</h1>
-            <p>{subtitle}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# =========================================================
-# 7. LOGIN AND REGISTRATION
-# =========================================================
-
-def login_page():
-    banner(
-        "🎓 CSE Placement Roadmap & Mentorship Portal",
-        "Learn, practise, receive mentorship and prepare for placements.",
-    )
-
-    _, center, _ = st.columns([1, 1.4, 1])
-
-    with center:
-        login_tab, student_tab, mentor_tab = st.tabs([
-            "Sign In",
-            "Student Registration",
-            "Mentor Registration",
-        ])
-
-        # -------------------------------------------------
-        # LOGIN
-        # -------------------------------------------------
-
-        with login_tab:
-            with st.form("login_form"):
-                username = st.text_input("Username")
-                password = st.text_input(
-                    "Password", type="password"
-                )
-
-                submit = st.form_submit_button(
-                    "Sign In",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-            if submit:
-                if not username.strip() or not password:
-                    st.error("Enter both username and password.")
-                else:
-                    users = fetch_all("""
-                        SELECT * FROM users
-                        WHERE username=? AND password_hash=?
-                    """, (
-                        username.strip(),
-                        hash_password(password),
-                    ))
-
-                    if users:
-                        st.session_state.user = users[0]
-                        st.rerun()
-                    else:
-                        st.error(
-                            "Invalid username or password. "
-                            "Check your details and try again."
-                        )
-
-            st.info(
-                "Default mentor login: "
-                "**mentor** / **Mentor@123**"
+            """,
+            (
+                username,
+                password_hash(password),
+                "Placement Mentor",
+                timestamp(),
             )
-
-        # -------------------------------------------------
-        # STUDENT REGISTRATION
-        # -------------------------------------------------
-
-        with student_tab:
-            with st.form("student_registration"):
-                name = st.text_input("Full Name")
-                username = st.text_input("Create Username")
-
-                password = st.text_input(
-                    "Create Password", type="password"
-                )
-
-                confirm = st.text_input(
-                    "Confirm Password", type="password"
-                )
-
-                year = st.selectbox("Academic Year", YEARS)
-
-                branch = st.text_input(
-                    "Branch",
-                    value="Computer Science & Engineering",
-                )
-
-                submit = st.form_submit_button(
-                    "Register as Student",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-            if submit:
-                if not name.strip() or not username.strip():
-                    st.error("Name and username are required.")
-
-                elif len(username.strip()) < 3:
-                    st.error(
-                        "Username must contain at least 3 characters."
-                    )
-
-                elif len(password) < 8:
-                    st.error(
-                        "Password must contain at least 8 characters."
-                    )
-
-                elif password != confirm:
-                    st.error("Passwords do not match.")
-
-                else:
-                    try:
-                        execute("""
-                            INSERT INTO users
-                            (username, password_hash, full_name, role,
-                             academic_year, branch, created_at)
-                            VALUES (?, ?, ?, 'student', ?, ?, ?)
-                        """, (
-                            username.strip(),
-                            hash_password(password),
-                            name.strip(),
-                            year,
-                            branch.strip(),
-                            now(),
-                        ))
-
-                        st.success(
-                            "Student account created. You can now sign in."
-                        )
-
-                    except sqlite3.IntegrityError:
-                        st.error(
-                            "That username is already registered."
-                        )
-
-        # -------------------------------------------------
-        # MENTOR REGISTRATION
-        # -------------------------------------------------
-
-        with mentor_tab:
-            st.warning(
-                "Mentor registration is enabled for this local demo. "
-                "For a public deployment, require an administrator-issued "
-                "invitation code before granting mentor access."
-            )
-
-            with st.form("mentor_registration"):
-                name = st.text_input("Mentor Full Name")
-
-                username = st.text_input(
-                    "Create Mentor Username",
-                    key="mentor_username",
-                )
-
-                password = st.text_input(
-                    "Create Password",
-                    type="password",
-                    key="mentor_password",
-                )
-
-                confirm = st.text_input(
-                    "Confirm Password",
-                    type="password",
-                    key="mentor_confirm",
-                )
-
-                submit = st.form_submit_button(
-                    "Register as Mentor",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-            if submit:
-                if not name.strip() or not username.strip():
-                    st.error(
-                        "Mentor name and username are required."
-                    )
-
-                elif len(username.strip()) < 3:
-                    st.error(
-                        "Username must contain at least 3 characters."
-                    )
-
-                elif len(password) < 8:
-                    st.error(
-                        "Password must contain at least 8 characters."
-                    )
-
-                elif password != confirm:
-                    st.error("Passwords do not match.")
-
-                else:
-                    try:
-                        execute("""
-                            INSERT INTO users
-                            (username, password_hash, full_name, role, created_at)
-                            VALUES (?, ?, ?, 'mentor', ?)
-                        """, (
-                            username.strip(),
-                            hash_password(password),
-                            name.strip(),
-                            now(),
-                        ))
-
-                        st.success(
-                            "Mentor account created. Sign in using "
-                            "your new account."
-                        )
-
-                    except sqlite3.IntegrityError:
-                        st.error(
-                            "That username is already registered."
-                        )
+        )
 
 
-# =========================================================
-# 8. RESOURCES & TASKS
-# =========================================================
+# ============================================================
+# MACHINE LEARNING MODEL
+# ============================================================
 
-def resources_tasks_page(user):
-    banner(
-        "📚 Resources & Tasks",
-        "Learn, practise and track your placement preparation.",
+@st.cache_resource
+def load_model():
+
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            "placement_model.pkl is missing from the GitHub repository."
+        )
+
+    if not ENCODER_PATH.exists():
+        raise FileNotFoundError(
+            "label_encoder.pkl is missing from the GitHub repository."
+        )
+
+    model = joblib.load(MODEL_PATH)
+    encoder = joblib.load(ENCODER_PATH)
+
+    if getattr(model, "n_features_in_", None) != len(FEATURE_COLUMNS):
+        raise ValueError(
+            "The ML model does not have the expected 9 input features."
+        )
+
+    return model, encoder
+
+
+def year_value(user):
+
+    return YEAR_NUMBER.get(
+        user.get("academic_year", "First Year"),
+        1
     )
 
-    user_year = user.get("academic_year", "First Year")
 
-    year = st.selectbox(
-        "Select Academic Year",
-        list(ROADMAP.keys()),
-        index=(
-            list(ROADMAP.keys()).index(user_year)
-            if user_year in ROADMAP else 0
-        ),
-        key="resources_academic_year",
+def ml_predict(
+    user,
+    coding,
+    dsa,
+    technical,
+    projects,
+    communication,
+    aptitude,
+    internship,
+    resume
+):
+
+    model, encoder = load_model()
+
+    features = pd.DataFrame(
+        [{
+            "Year": year_value(user),
+            "Coding_Score": int(coding),
+            "DSA_Score": int(dsa),
+            "Technical_Skills": int(technical),
+            "Projects_Score": int(projects),
+            "Communication_Score": int(communication),
+            "Aptitude_Score": int(aptitude),
+            "Internship_Experience": (
+                1 if internship == "Yes" else 0
+            ),
+            "Resume_Score": int(resume),
+        }],
+        columns=FEATURE_COLUMNS
     )
 
-    categories = ROADMAP[year]
-
-    # Use unique task keys for each academic year.
-    all_tasks = [
-        f"{year}:{category}:{task}"
-        for category, task_list in categories.items()
-        for task in task_list
-    ]
-
-    completed_rows = fetch_all("""
-        SELECT task_key FROM tasks
-        WHERE student_id=? AND completed=1
-    """, (user["id"],))
-
-    completed_set = {
-        row["task_key"] for row in completed_rows
-    }
-
-    # Only count tasks belonging to the selected year.
-    completed_count = sum(
-        1 for task_key in all_tasks
-        if task_key in completed_set
+    prediction_code = int(
+        model.predict(features)[0]
     )
 
-    total_count = len(all_tasks)
-
-    progress = min(
-        1.0,
-        max(
-            0.0,
-            completed_count / max(1, total_count),
-        ),
+    prediction = str(
+        encoder.inverse_transform(
+            [prediction_code]
+        )[0]
     )
 
-    col1, col2 = st.columns(2)
+    confidence = None
 
-    col1.metric(
-        "Completed Tasks",
-        f"{completed_count}/{total_count}",
-    )
+    if hasattr(model, "predict_proba"):
+        probabilities = model.predict_proba(features)[0]
+        confidence = float(np.max(probabilities)) * 100
 
-    col2.metric(
-        "Completion Progress",
-        f"{progress * 100:.1f}%",
-    )
-    st.markdown(
-    f"""
-    <div style="
-        background:#e5e7eb;
-        border-radius:20px;
-        height:14px;
-        width:100%;
-        overflow:hidden;
-    ">
-        <div style="
-            background:#2563eb;
-            width:{progress * 100}%;
-            height:14px;
-            border-radius:20px;
-        "></div>
-    </div>
-    <p>{progress * 100:.1f}% completed</p>
-    """,
-    unsafe_allow_html=True
-)
+    return prediction, confidence
 
-    
 
-    st.caption(
-        f"Resources and tasks for {year}"
-    )
+# ============================================================
+# COMMON UI FUNCTION
+# ============================================================
 
+def page_header(title, subtitle):
+
+    st.title(title)
+    st.caption(subtitle)
     st.divider()
 
-    for category, task_list in categories.items():
-        st.markdown(f"### 📌 {category}")
 
-        for task in task_list:
-            task_key = f"{year}:{category}:{task}"
+# ============================================================
+# LOGIN AND REGISTRATION
+# ============================================================
 
-            is_completed = task_key in completed_set
+def login_page():
 
-            checked = st.checkbox(
-                task,
-                value=is_completed,
-                key=f"task_{user['id']}_{task_key}",
-            )
-
-            if checked != is_completed:
-                if checked:
-                    execute("""
-                        INSERT INTO tasks
-                        (student_id, task_key, completed)
-                        VALUES (?, ?, 1)
-                        ON CONFLICT(student_id, task_key)
-                        DO UPDATE SET completed=1
-                    """, (
-                        user["id"],
-                        task_key,
-                    ))
-
-                else:
-                    execute("""
-                        DELETE FROM tasks
-                        WHERE student_id=? AND task_key=?
-                    """, (
-                        user["id"],
-                        task_key,
-                    ))
-
-                st.rerun()
-
-        st.divider()
-        # =========================================================
-# 8. STUDENT DASHBOARD
-# =========================================================
-
-def student_dashboard(user):
-    banner(
-        f"Welcome back, {user['full_name']} 👋",
-        "Track your learning progress and placement preparation.",
-    )
-
-    year = user.get("academic_year", "First Year")
-    roadmap = ROADMAP.get(year, ROADMAP["First Year"])
-
-    task_keys = [
-        f"{year}:{category}:{task}"
-        for category, tasks in roadmap.items()
-        for task in tasks
-    ]
-
-    completed_rows = fetch_all("""
-        SELECT task_key FROM tasks
-        WHERE student_id=? AND completed=1
-    """, (user["id"],))
-
-    completed_set = {
-        row["task_key"] for row in completed_rows
-    }
-
-    completed_count = sum(
-        1 for key in task_keys if key in completed_set
-    )
-    total_count = len(task_keys)
-
-    progress = min(
-        1.0,
-        max(
-            0.0,
-            completed_count / max(1, total_count),
-        ),
-    )
-
-    question_count = count_rows("""
-        SELECT COUNT(*) AS total
-        FROM questions WHERE student_id=?
-    """, (user["id"],))
-
-    application_count = count_rows("""
-        SELECT COUNT(*) AS total
-        FROM applications WHERE student_id=?
-    """, (user["id"],))
-
-    a, b, c, d = st.columns(4)
-
-    a.metric(
-        "Completed Tasks",
-        f"{completed_count}/{total_count}",
-    )
-    b.metric(
-        "Learning Progress",
-        f"{progress * 100:.1f}%",
-    )
-    c.metric("Mentor Questions", question_count)
-    d.metric("Applications", application_count)
-
-    st.subheader("Learning Progress")
-    st.progress(progress)
-
-    st.caption(
-        f"Completed {completed_count} of {total_count} tasks for {year}."
-    )
-
-    if completed_count == total_count:
-        st.success(
-            "🎉 You completed all tasks for this academic year."
-        )
-    elif completed_count == 0:
-        st.info(
-            "Start completing tasks in Resources & Tasks."
-        )
-    elif progress < 0.5:
-        st.warning(
-            "Keep going. Follow your learning roadmap."
-        )
-    else:
-        st.success(
-            "Good progress. Continue with your remaining tasks."
-        )
-
-    left, right = st.columns(2)
-
-    with left:
-        st.subheader("Next Tasks")
-
-        pending = [
-            task
-            for category, tasks in roadmap.items()
-            for task in tasks
-            if f"{year}:{category}:{task}" not in completed_set
-        ]
-
-        if pending:
-            for task in pending[:5]:
-                st.write("◻️", task)
-        else:
-            st.success(
-                "All roadmap tasks are complete."
-            )
-
-    with right:
-        st.subheader("Recent Applications")
-
-        rows = fetch_all("""
-            SELECT company, role, status, applied_at
-            FROM applications
-            WHERE student_id=?
-            ORDER BY id DESC LIMIT 5
-        """, (user["id"],))
-
-        if rows:
-            st.dataframe(
-                pd.DataFrame(rows),
-                hide_index=True,
-                use_container_width=True,
-            )
-        else:
-            st.info(
-                "Start tracking your applications."
-            )
-
-
-# =========================================================
-# 9. PLACEMENT READINESS ASSESSMENT
-# =========================================================
-
-def placement_readiness(user):
-
-    banner(
-        "🎯 Placement Readiness Prediction",
-        "Enter your current preparation level to assess your readiness.",
+    st.title(
+        "🎓 CSE Placement Roadmap & Mentorship Portal"
     )
 
     st.write(
-        "Rate each skill from **0 to 100**. "
-        "Use realistic scores to identify areas for improvement."
+        "Learn, practise, receive mentorship and prepare for placements."
     )
 
-    left, right = st.columns(2, gap="large")
+    sign_in, register = st.tabs(
+        ["Sign In", "Student Registration"]
+    )
+
+    with sign_in:
+
+        with st.form("login_form"):
+
+            username = st.text_input("Username")
+
+            password = st.text_input(
+                "Password",
+                type="password"
+            )
+
+            submit = st.form_submit_button(
+                "Sign In",
+                type="primary"
+            )
+
+        if submit:
+
+            user = query(
+                """
+                SELECT * FROM users
+                WHERE username=? AND password_hash=?
+                """,
+                (
+                    username.strip(),
+                    password_hash(password)
+                ),
+                one=True
+            )
+
+            if user:
+                st.session_state["user"] = user
+                st.rerun()
+
+            else:
+                st.error("Invalid username or password.")
+
+        st.info(
+            "Default mentor login: **mentor** / **Mentor@123**"
+        )
+
+    with register:
+
+        with st.form("student_register"):
+
+            full_name = st.text_input("Full Name")
+
+            username = st.text_input(
+                "Create Username",
+                key="reg_username"
+            )
+
+            password = st.text_input(
+                "Create Password",
+                type="password",
+                key="reg_password"
+            )
+
+            confirm = st.text_input(
+                "Confirm Password",
+                type="password"
+            )
+
+            academic_year = st.selectbox(
+                "Academic Year",
+                YEARS
+            )
+
+            branch = st.text_input(
+                "Branch",
+                value="Computer Science & Engineering"
+            )
+
+            submit = st.form_submit_button(
+                "Register",
+                type="primary"
+            )
+
+        if submit:
+
+            if not full_name.strip() or not username.strip():
+                st.error("Name and username are required.")
+
+            elif len(password) < 8:
+                st.error(
+                    "Password must contain at least 8 characters."
+                )
+
+            elif password != confirm:
+                st.error("Passwords do not match.")
+
+            else:
+
+                try:
+
+                    execute(
+                        """
+                        INSERT INTO users
+                        (
+                            username,
+                            password_hash,
+                            full_name,
+                            role,
+                            academic_year,
+                            branch,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, 'student', ?, ?, ?)
+                        """,
+                        (
+                            username.strip(),
+                            password_hash(password),
+                            full_name.strip(),
+                            academic_year,
+                            branch.strip(),
+                            timestamp()
+                        )
+                    )
+
+                    st.success(
+                        "Registration successful. Please sign in."
+                    )
+
+                except sqlite3.IntegrityError:
+
+                    st.error(
+                        "That username is already registered."
+                    )
+
+
+# ============================================================
+# STUDENT DASHBOARD
+# ============================================================
+
+def student_dashboard(user):
+
+    page_header(
+        f"Welcome, {user['full_name']} 👋",
+        "Your placement preparation overview."
+    )
+
+    year = user.get(
+        "academic_year",
+        "First Year"
+    )
+
+    tasks = [
+        f"{year}:{category}:{task}"
+        for category, items in ROADMAP[year].items()
+        for task in items
+    ]
+
+    completed = query(
+        """
+        SELECT task_key FROM tasks
+        WHERE student_id=? AND completed=1
+        """,
+        (user["id"],)
+    )
+
+    done = {
+        row["task_key"]
+        for row in completed
+    }
+
+    completed_count = sum(
+        key in done
+        for key in tasks
+    )
+
+    total = len(tasks)
+
+    questions = query(
+        """
+        SELECT COUNT(*) AS n
+        FROM questions
+        WHERE student_id=?
+        """,
+        (user["id"],),
+        one=True
+    )["n"]
+
+    applications = query(
+        """
+        SELECT COUNT(*) AS n
+        FROM applications
+        WHERE student_id=?
+        """,
+        (user["id"],),
+        one=True
+    )["n"]
+
+    a, b, c = st.columns(3)
+
+    a.metric(
+        "Tasks completed",
+        f"{completed_count}/{total}"
+    )
+
+    b.metric(
+        "Mentor questions",
+        questions
+    )
+
+    c.metric(
+        "Applications",
+        applications
+    )
+
+    st.subheader("Learning progress")
+
+    st.progress(
+        completed_count / total if total else 0
+    )
+
+    st.write(
+        f"{completed_count} of {total} roadmap tasks completed for {year}."
+    )
+
+    st.subheader("Recent placement applications")
+
+    rows = query(
+        """
+        SELECT company, role, status, applied_at
+        FROM applications
+        WHERE student_id=?
+        ORDER BY id DESC
+        LIMIT 5
+        """,
+        (user["id"],)
+    )
+
+    if rows:
+
+        st.dataframe(
+            pd.DataFrame(rows),
+            hide_index=True,
+            use_container_width=True
+        )
+
+    else:
+
+        st.info(
+            "No applications recorded yet. Add one in Placement Tracker."
+        )
+
+
+# ============================================================
+# RESOURCES AND TASKS
+# ============================================================
+
+def resources_page(user):
+
+    page_header(
+        "📚 Resources & Tasks",
+        "Complete your year-wise placement preparation roadmap."
+    )
+
+    year = st.selectbox(
+        "Academic Year",
+        YEARS,
+        index=YEAR_NUMBER.get(
+            user.get("academic_year", "First Year"),
+            1
+        ) - 1
+    )
+
+    items = ROADMAP[year]
+
+    keys = [
+        f"{year}:{category}:{task}"
+        for category, tasks in items.items()
+        for task in tasks
+    ]
+
+    done_rows = query(
+        """
+        SELECT task_key FROM tasks
+        WHERE student_id=? AND completed=1
+        """,
+        (user["id"],)
+    )
+
+    done = {
+        row["task_key"]
+        for row in done_rows
+    }
+
+    count = sum(
+        key in done
+        for key in keys
+    )
+
+    st.metric(
+        "Completion",
+        f"{count}/{len(keys)}"
+    )
+
+    st.progress(
+        count / len(keys) if keys else 0
+    )
+
+    for category, tasks in items.items():
+
+        with st.expander(category, expanded=True):
+
+            for task in tasks:
+
+                key = f"{year}:{category}:{task}"
+
+                checked = st.checkbox(
+                    task,
+                    value=key in done,
+                    key=f"task_{user['id']}_{key}"
+                )
+
+                if checked and key not in done:
+
+                    execute(
+                        """
+                        INSERT OR REPLACE INTO tasks
+                        (student_id, task_key, completed)
+                        VALUES (?, ?, 1)
+                        """,
+                        (user["id"], key)
+                    )
+
+                    st.rerun()
+
+                if not checked and key in done:
+
+                    execute(
+                        """
+                        DELETE FROM tasks
+                        WHERE student_id=? AND task_key=?
+                        """,
+                        (user["id"], key)
+                    )
+
+                    st.rerun()
+
+
+# ============================================================
+# ML PLACEMENT READINESS PREDICTION
+# ============================================================
+
+def readiness_page(user):
+
+    page_header(
+        "🤖 ML Placement Readiness Prediction",
+        "The Random Forest model predicts a preparation category from your skills."
+    )
+
+    st.info(
+        "Enter honest scores from 0 to 100. "
+        "This model estimates a readiness category; it does not "
+        "guarantee a job or represent a real hiring probability."
+    )
+
+    left, right = st.columns(2)
 
     with left:
 
@@ -895,45 +815,35 @@ def placement_readiness(user):
             "Coding Score",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_coding",
+            value=50
         )
 
         dsa = st.number_input(
             "DSA Score",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_dsa",
+            value=50
         )
 
         technical = st.number_input(
             "Technical Skills",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_technical",
+            value=50
         )
 
         projects = st.number_input(
             "Projects Score",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_projects",
+            value=50
         )
 
         communication = st.number_input(
             "Communication Score",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_communication",
+            value=50
         )
 
     with right:
@@ -942,306 +852,226 @@ def placement_readiness(user):
             "Aptitude Score",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_aptitude",
+            value=50
         )
 
         internship = st.selectbox(
             "Internship Experience",
-            ["No", "Yes"],
-            key="readiness_internship",
+            ["No", "Yes"]
         )
 
         resume = st.number_input(
             "Resume Score",
             min_value=0,
             max_value=100,
-            value=50,
-            step=1,
-            key="readiness_resume",
+            value=50
         )
 
-        st.markdown("### Assessment Guide")
-
-        st.write("**0–39:** Needs improvement")
-        st.write("**40–59:** Developing")
-        st.write("**60–79:** Good preparation")
-        st.write("**80–100:** Strong preparation")
-
-        st.info(
-            "This is a rule-based preparation score, "
-            "not a verified probability of being hired."
+        st.text_input(
+            "Academic Year",
+            value=user.get("academic_year", "First Year"),
+            disabled=True
         )
 
-    # =====================================================
-    # PREDICTION
-    # =====================================================
+        st.caption(
+            "Academic year is automatically converted to the Year feature used during model training."
+        )
 
     if st.button(
-        "🔮 Predict Placement Readiness",
+        "Predict with Machine Learning",
         type="primary",
-        use_container_width=True,
-        key="predict_readiness",
+        use_container_width=True
     ):
 
-        score = round(
-            coding * 0.20
-            + aptitude * 0.15
-            + dsa * 0.20
-            + technical * 0.20
-            + resume * 0.10
-            + projects * 0.10
-            + communication * 0.05
-            + (3 if internship == "Yes" else 0)
-        )
+        try:
 
-        score = max(0, min(100, score))
+            prediction, confidence = ml_predict(
+                user,
+                coding,
+                dsa,
+                technical,
+                projects,
+                communication,
+                aptitude,
+                internship,
+                resume
+            )
 
-        # RESULT CLASSIFICATION
+            st.session_state["latest_ml_result"] = {
+                "prediction": prediction,
+                "confidence": confidence,
+                "coding": coding,
+                "dsa": dsa,
+                "technical": technical,
+                "projects": projects,
+                "communication": communication,
+                "aptitude": aptitude,
+                "internship": internship,
+                "resume": resume,
+            }
 
-        if score >= 80:
-            result = "Strong Preparation"
+            average_score = int(
+                round(
+                    np.mean([
+                        coding,
+                        dsa,
+                        technical,
+                        projects,
+                        communication,
+                        aptitude,
+                        resume
+                    ])
+                )
+            )
 
-        elif score >= 60:
-            result = "Good Preparation"
+            execute(
+                """
+                INSERT INTO assessments
+                (
+                    student_id,
+                    coding,
+                    aptitude,
+                    dsa,
+                    internship,
+                    technical,
+                    resume,
+                    projects,
+                    communication,
+                    score,
+                    result,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user["id"],
+                    int(coding),
+                    int(aptitude),
+                    int(dsa),
+                    internship,
+                    int(technical),
+                    int(resume),
+                    int(projects),
+                    int(communication),
+                    average_score,
+                    prediction,
+                    timestamp()
+                )
+            )
 
-        elif score >= 40:
-            result = "Developing"
+        except Exception as exc:
 
-        else:
-            result = "Needs Improvement"
+            st.error(
+                f"ML prediction could not be completed: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
-        # =================================================
-        # RESULT DISPLAY
-        # =================================================
+            st.caption(
+                "Check that both model files are in the same GitHub folder as app1.py."
+            )
+
+    result = st.session_state.get(
+        "latest_ml_result"
+    )
+
+    if result:
 
         st.divider()
-        st.subheader("Your Placement Readiness Result")
 
-        col1, col2 = st.columns(2)
+        st.subheader("Your ML prediction")
 
-        with col1:
-            st.metric(
-                "Readiness Score",
-                f"{score}/100",
-            )
-
-        with col2:
-            st.metric(
-                "Assessment",
-                result,
-            )
-
-        # CUSTOM HTML PROGRESS BAR
-
-        st.markdown(
-            f"""
-            <div style="
-                width:100%;
-                background:#e5e7eb;
-                height:18px;
-                border-radius:20px;
-                overflow:hidden;
-            ">
-                <div style="
-                    width:{score}%;
-                    height:18px;
-                    background:#2563eb;
-                    border-radius:20px;
-                "></div>
-            </div>
-            <p style="text-align:right;font-weight:bold;">
-                {score}% Readiness
-            </p>
-            """,
-            unsafe_allow_html=True,
+        st.metric(
+            "Predicted readiness category",
+            result["prediction"]
         )
 
-        if score >= 80:
-            st.success(f"Excellent! {result}")
+        if result["confidence"] is not None:
 
-        elif score >= 60:
-            st.success(f"Good work! {result}")
+            st.metric(
+                "Model confidence for this classification",
+                f"{result['confidence']:.1f}%"
+            )
 
-        elif score >= 40:
-            st.warning(f"Keep improving! {result}")
+        st.caption(
+            "Confidence is the model's classification confidence "
+            "on this input, not the probability of getting placed."
+        )
 
-        else:
-            st.error(f"More preparation needed: {result}")
-
-        # =================================================
-        # SKILL ANALYSIS
-        # =================================================
-
-        scores = {
-            "Coding": coding,
-            "Aptitude": aptitude,
-            "DSA": dsa,
-            "Technical Skills": technical,
-            "Resume": resume,
-            "Projects": projects,
-            "Communication": communication,
+        score_values = {
+            "Coding": result["coding"],
+            "DSA": result["dsa"],
+            "Technical": result["technical"],
+            "Projects": result["projects"],
+            "Communication": result["communication"],
+            "Aptitude": result["aptitude"],
+            "Resume": result["resume"],
         }
 
         weak = [
             name
-            for name, value in scores.items()
-            if value < 40
+            for name, value in score_values.items()
+            if value < 45
         ]
-
-        medium = [
-            name
-            for name, value in scores.items()
-            if 40 <= value < 60
-        ]
-
-        st.subheader("📊 Skill Analysis")
 
         if weak:
-            st.error(
-                "Priority improvement areas: "
-                + ", ".join(weak)
-            )
 
-        if medium:
             st.warning(
-                "Practise more in: "
-                + ", ".join(medium)
+                "Focus on improving: " + ", ".join(weak)
             )
 
-        if not weak and not medium:
+        else:
+
             st.success(
-                "Your entered skill scores are well balanced."
+                "No skill score is below 45. Continue practising consistently."
             )
 
-        # =================================================
-        # SAVE ASSESSMENT IN DATABASE
-        # =================================================
-
-        execute("""
-            INSERT INTO assessments
-            (
-                student_id,
-                coding,
-                aptitude,
-                dsa,
-                internship,
-                technical,
-                resume,
-                projects,
-                communication,
-                score,
-                result,
-                created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user["id"],
-            coding,
-            aptitude,
-            dsa,
-            internship,
-            technical,
-            resume,
-            projects,
-            communication,
-            score,
-            result,
-            now(),
-        ))
-
-        st.success(
-            "Your assessment has been saved successfully."
+        st.bar_chart(
+            pd.DataFrame({"Score": score_values})
         )
 
-    # =====================================================
-    # PREVIOUS ASSESSMENT HISTORY
-    # =====================================================
+    st.subheader("Previous ML assessments")
 
-    st.divider()
-
-    st.subheader("📋 Previous Assessment History")
-
-    history = fetch_all("""
-        SELECT
-            coding,
-            aptitude,
-            dsa,
-            technical,
-            resume,
-            projects,
-            communication,
-            score,
-            result,
-            created_at
+    history = query(
+        """
+        SELECT score, result, created_at
         FROM assessments
         WHERE student_id=?
         ORDER BY id DESC
         LIMIT 10
-    """, (user["id"],))
+        """,
+        (user["id"],)
+    )
 
     if history:
 
-        for index, record in enumerate(history, start=1):
-
-            with st.expander(
-                f"Assessment {index} — {record['created_at']}"
-            ):
-
-                st.write(
-                    f"**Readiness Score:** {record['score']}/100"
-                )
-
-                st.write(
-                    f"**Result:** {record['result']}"
-                )
-
-                st.table(
-                    {
-                        "Skill": [
-                            "Coding",
-                            "Aptitude",
-                            "DSA",
-                            "Technical",
-                            "Resume",
-                            "Projects",
-                            "Communication",
-                        ],
-                        "Score": [
-                            record["coding"],
-                            record["aptitude"],
-                            record["dsa"],
-                            record["technical"],
-                            record["resume"],
-                            record["projects"],
-                            record["communication"],
-                        ],
-                    }
-                )
+        st.dataframe(
+            pd.DataFrame(history),
+            hide_index=True,
+            use_container_width=True
+        )
 
     else:
 
         st.info(
-            "You have not completed any assessments yet."
+            "No assessments saved yet."
         )
 
 
-# =========================================================
-# 10. ASK MENTOR
-# =========================================================
+# ============================================================
+# ASK A MENTOR
+# ============================================================
 
 def ask_mentor_page(user):
-    banner(
-        "💬 Ask Your Mentor",
-        "Ask questions and get guidance from your placement mentor.",
+
+    page_header(
+        "💬 Ask a Mentor",
+        "Submit placement and learning questions."
     )
 
-    st.subheader("Submit a Question")
+    with st.form("ask_question"):
 
-    with st.form("ask_mentor_form"):
         topic = st.selectbox(
-            "Select Topic",
+            "Topic",
             [
                 "Programming",
                 "Data Structures & Algorithms",
@@ -1251,463 +1081,311 @@ def ask_mentor_page(user):
                 "Interview Preparation",
                 "Projects",
                 "Career Guidance",
-                "Other",
-            ],
+                "Other"
+            ]
         )
 
         question = st.text_area(
-            "Write Your Question",
-            placeholder="Type your question here...",
-            height=130,
+            "Your question"
         )
 
         submit = st.form_submit_button(
             "Submit Question",
-            type="primary",
-            use_container_width=True,
+            type="primary"
         )
 
     if submit:
-        if not question.strip():
-            st.error(
-                "Please enter your question."
-            )
-        else:
-            execute("""
+
+        if question.strip():
+
+            execute(
+                """
                 INSERT INTO questions
                 (student_id, question, topic, asked_at)
                 VALUES (?, ?, ?, ?)
-            """, (
-                user["id"],
-                question.strip(),
-                topic,
-                now(),
-            ))
-
-            st.success(
-                "Your question has been submitted to the mentor."
+                """,
+                (
+                    user["id"],
+                    question.strip(),
+                    topic,
+                    timestamp()
+                )
             )
 
+            st.success("Question submitted.")
             st.rerun()
 
-    st.divider()
+        else:
 
-    st.subheader("My Questions and Answers")
+            st.error(
+                "Please enter your question."
+            )
 
-    questions = fetch_all("""
-        SELECT
-            q.id,
-            q.question,
-            q.topic,
-            q.answer,
-            q.asked_at,
-            q.answered_at,
-            u.full_name AS mentor_name
-        FROM questions q
-        LEFT JOIN users u ON q.mentor_id = u.id
-        WHERE q.student_id=?
-        ORDER BY q.id DESC
-    """, (user["id"],))
+    st.subheader("My questions")
 
-    if not questions:
-        st.info(
-            "You have not submitted any questions yet."
-        )
-
-    for item in questions:
-        with st.expander(
-            f"Q{item['id']} — {item['topic']} "
-            f"({item['asked_at']})"
-        ):
-            st.markdown("**Your Question:**")
-            st.write(item["question"])
-
-            if item["answer"]:
-                st.success("Mentor's Answer")
-                st.write(item["answer"])
-
-                if item["mentor_name"]:
-                    st.caption(
-                        f"Answered by: {item['mentor_name']}"
-                    )
-
-                st.caption(
-                    f"Answered at: {item['answered_at']}"
-                )
-
-            else:
-                st.warning(
-                    "Waiting for mentor response."
-                )
-                # =========================================================
-# 11. STUDENT FEEDBACK
-# =========================================================
-
-def responses_feedback(user):
-    banner(
-        "⭐ Mentor Responses & Feedback",
-        "Review responses and rate their usefulness.",
+    rows = query(
+        """
+        SELECT * FROM questions
+        WHERE student_id=?
+        ORDER BY id DESC
+        """,
+        (user["id"],)
     )
-
-    rows = fetch_all("""
-        SELECT q.*, f.rating, f.comment
-        FROM questions q
-        LEFT JOIN feedback f ON f.question_id=q.id
-        WHERE q.student_id=?
-        ORDER BY q.id DESC
-    """, (user["id"],))
-
-    if not rows:
-        st.info("You have not asked a question yet.")
-        return
 
     for row in rows:
-        with st.container(border=True):
-            st.write("**Question:**", row["question"])
 
-            if not row["answer"]:
-                st.warning("Mentor response pending.")
-                continue
+        with st.expander(
+            f"{row['topic']} — {row['asked_at']}"
+        ):
 
-            st.write("**Mentor Response:**", row["answer"])
+            st.write(row["question"])
 
-            if row["rating"] is not None:
-                st.success(f"Your rating: {row['rating']}/5")
-                if row["comment"]:
-                    st.write(row["comment"])
-                continue
+            if row["answer"]:
 
-            with st.form(f"feedback-{row['id']}"):
-                rating = st.slider(
-                    "Rate the response",
-                    1, 5, 5,
-                    key=f"rating-{row['id']}",
+                st.success(row["answer"])
+
+            else:
+
+                st.info(
+                    "Waiting for mentor response."
                 )
-                comment = st.text_area(
-                    "Comment (optional)",
-                    key=f"comment-{row['id']}",
-                )
-                submit = st.form_submit_button("Submit Feedback")
-
-            if submit:
-                execute("""
-                    INSERT INTO feedback
-                    (question_id, student_id, rating, comment, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (
-                    row["id"], user["id"], rating,
-                    comment.strip(), now(),
-                ))
-
-                st.success("Feedback submitted.")
-                st.rerun()
 
 
-# =========================================================
-# 12. PLACEMENT TRACKER
-# =========================================================
+# ============================================================
+# PLACEMENT TRACKER
+# ============================================================
 
-def placement_tracker(user):
-    banner(
+def tracker_page(user):
+
+    page_header(
         "📋 Placement Tracker",
-        "Track applications, interviews and offers.",
+        "Record and manage job applications."
     )
 
-    with st.form("application_form"):
-        company = st.text_input("Company Name")
+    with st.form("add_application"):
+
+        company = st.text_input("Company")
+
         role = st.text_input("Job Role")
-        status = st.selectbox("Application Status", STATUSES)
-        notes = st.text_input("Notes (optional)")
+
+        status = st.selectbox(
+            "Status",
+            STATUSES
+        )
+
+        notes = st.text_area(
+            "Notes (optional)"
+        )
+
         submit = st.form_submit_button(
-            "Add Application", type="primary"
+            "Add Application",
+            type="primary"
         )
 
     if submit:
-        if not company.strip() or not role.strip():
-            st.error("Company and job role are required.")
-        else:
-            execute("""
-                INSERT INTO applications
-                (student_id, company, role, status, applied_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                user["id"], company.strip(), role.strip(),
-                status, now(), notes.strip(),
-            ))
 
-            st.success("Application added.")
+        if company.strip() and role.strip():
+
+            execute(
+                """
+                INSERT INTO applications
+                (
+                    student_id,
+                    company,
+                    role,
+                    status,
+                    applied_at,
+                    notes
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user["id"],
+                    company.strip(),
+                    role.strip(),
+                    status,
+                    timestamp(),
+                    notes.strip()
+                )
+            )
+
+            st.success("Application saved.")
             st.rerun()
 
-    rows = fetch_all("""
+        else:
+
+            st.error(
+                "Company and job role are required."
+            )
+
+    rows = query(
+        """
         SELECT * FROM applications
         WHERE student_id=?
         ORDER BY id DESC
-    """, (user["id"],))
-
-    if not rows:
-        st.info("No applications recorded yet.")
-        return
-
-    df = pd.DataFrame(rows)
-
-    st.dataframe(
-        df[["company", "role", "status", "applied_at", "notes"]],
-        hide_index=True,
-        use_container_width=True,
+        """,
+        (user["id"],)
     )
-
-    st.download_button(
-        "Download Applications CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        file_name="placement_applications.csv",
-        mime="text/csv",
-    )
-
-    with st.expander("Update or Delete Application"):
-        choices = {
-            f"#{row['id']} — {row['company']} / {row['role']}": row
-            for row in rows
-        }
-
-        label = st.selectbox(
-            "Select Application", list(choices.keys())
-        )
-        selected = choices[label]
-
-        new_status = st.selectbox(
-            "New Status",
-            STATUSES,
-            index=(
-                STATUSES.index(selected["status"])
-                if selected["status"] in STATUSES else 0
-            ),
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-            if st.button("Save Status"):
-                execute("""
-                    UPDATE applications SET status=?
-                    WHERE id=? AND student_id=?
-                """, (
-                    new_status, selected["id"], user["id"]
-                ))
-                st.success("Status updated.")
-                st.rerun()
-
-        with c2:
-            if st.button("Delete Application"):
-                execute("""
-                    DELETE FROM applications
-                    WHERE id=? AND student_id=?
-                """, (selected["id"], user["id"]))
-
-                st.success("Application deleted.")
-                st.rerun()
-
-
-# =========================================================
-# 13. MENTOR DASHBOARD
-# =========================================================
-
-def mentor_dashboard(user):
-    banner(
-        f"Welcome, {user['full_name']}",
-        "Manage student questions, feedback and placement outcomes.",
-    )
-
-    students = count_rows(
-        "SELECT COUNT(*) AS total FROM users WHERE role='student'"
-    )
-    questions = count_rows(
-        "SELECT COUNT(*) AS total FROM questions"
-    )
-    pending = count_rows(
-        "SELECT COUNT(*) AS total FROM questions WHERE answer=''"
-    )
-    offers = count_rows("""
-        SELECT COUNT(*) AS total FROM applications
-        WHERE status IN ('Selected', 'Offer Received')
-    """)
-
-    a, b, c, d = st.columns(4)
-    a.metric("Students", students)
-    b.metric("Questions", questions)
-    c.metric("Pending Replies", pending)
-    d.metric("Selections / Offers", offers)
-
-    st.subheader("Recent Student Questions")
-
-    rows = fetch_all("""
-        SELECT u.full_name, q.topic, q.question, q.asked_at
-        FROM questions q
-        JOIN users u ON u.id=q.student_id
-        ORDER BY q.id DESC LIMIT 10
-    """)
 
     if rows:
+
+        df = pd.DataFrame(rows)
+
         st.dataframe(
-            pd.DataFrame(rows),
+            df,
             hide_index=True,
-            use_container_width=True,
+            use_container_width=True
         )
+
+        st.download_button(
+            "Download CSV",
+            df.to_csv(index=False).encode("utf-8"),
+            "placement_applications.csv",
+            "text/csv"
+        )
+
     else:
-        st.info("No student questions yet.")
+
+        st.info(
+            "No applications recorded yet."
+        )
 
 
-def mentor_questions(user):
-    banner(
-        "📨 Student Questions",
-        "Read questions and provide mentor responses.",
+# ============================================================
+# MENTOR DASHBOARD
+# ============================================================
+
+def mentor_dashboard(user):
+
+    page_header(
+        "Mentor Dashboard",
+        "Review student activity and questions."
     )
 
-    rows = fetch_all("""
+    students = query(
+        "SELECT COUNT(*) AS n FROM users WHERE role='student'",
+        one=True
+    )["n"]
+
+    questions = query(
+        "SELECT COUNT(*) AS n FROM questions",
+        one=True
+    )["n"]
+
+    pending = query(
+        "SELECT COUNT(*) AS n FROM questions WHERE answer=''",
+        one=True
+    )["n"]
+
+    a, b, c = st.columns(3)
+
+    a.metric("Students", students)
+    b.metric("Questions", questions)
+    c.metric("Pending replies", pending)
+
+
+# ============================================================
+# MENTOR QUESTIONS
+# ============================================================
+
+def mentor_questions(user):
+
+    page_header(
+        "Student Questions",
+        "Respond to questions submitted by students."
+    )
+
+    rows = query(
+        """
         SELECT q.*, u.full_name
         FROM questions q
         JOIN users u ON u.id=q.student_id
         ORDER BY q.id DESC
-    """)
+        """
+    )
 
     if not rows:
-        st.info("No student questions yet.")
-        return
+
+        st.info("No questions yet.")
 
     for row in rows:
+
         with st.expander(
-            f"{row['full_name']} — Question #{row['id']}"
+            f"{row['full_name']} — {row['topic']} — #{row['id']}"
         ):
-            st.write("**Topic:**", row["topic"])
+
             st.write(row["question"])
 
-            with st.form(f"mentor-answer-{row['id']}"):
+            with st.form(
+                f"answer_{row['id']}"
+            ):
+
                 answer = st.text_area(
-                    "Mentor Response",
-                    value=row["answer"] or "",
-                    key=f"answer-{row['id']}",
+                    "Mentor response",
+                    value=row["answer"] or ""
                 )
-                submit = st.form_submit_button("Save Response")
+
+                submit = st.form_submit_button(
+                    "Save Response"
+                )
 
             if submit:
-                if not answer.strip():
-                    st.error("Response cannot be empty.")
-                else:
-                    execute("""
+
+                if answer.strip():
+
+                    execute(
+                        """
                         UPDATE questions
                         SET answer=?, mentor_id=?, answered_at=?
                         WHERE id=?
-                    """, (
-                        answer.strip(), user["id"],
-                        now(), row["id"]
-                    ))
+                        """,
+                        (
+                            answer.strip(),
+                            user["id"],
+                            timestamp(),
+                            row["id"]
+                        )
+                    )
 
                     st.success("Response saved.")
                     st.rerun()
 
+                else:
 
-def mentor_feedback():
-    banner(
-        "⭐ Student Feedback",
-        "Review student ratings and comments.",
-    )
-
-    rows = fetch_all("""
-        SELECT u.full_name, q.question, f.rating,
-               f.comment, f.created_at
-        FROM feedback f
-        JOIN users u ON u.id=f.student_id
-        JOIN questions q ON q.id=f.question_id
-        ORDER BY f.id DESC
-    """)
-
-    if not rows:
-        st.info("No feedback submitted yet.")
-        return
-
-    average = sum(row["rating"] for row in rows) / len(rows)
-    st.metric("Average Rating", f"{average:.1f}/5")
-
-    st.dataframe(
-        pd.DataFrame(rows),
-        hide_index=True,
-        use_container_width=True,
-    )
+                    st.error(
+                        "Response cannot be empty."
+                    )
 
 
-def mentor_outcomes():
-    banner(
-        "🎯 Placement Outcomes",
-        "Review student applications and outcomes.",
-    )
-
-    rows = fetch_all("""
-        SELECT u.full_name, a.company, a.role,
-               a.status, a.applied_at, a.notes
-        FROM applications a
-        JOIN users u ON u.id=a.student_id
-        ORDER BY a.id DESC
-    """)
-
-    if not rows:
-        st.info("No placement applications recorded yet.")
-        return
-
-    df = pd.DataFrame(rows)
-
-    statuses = ["All"] + sorted(
-        df["status"].dropna().unique().tolist()
-    )
-
-    selected = st.selectbox("Filter Status", statuses)
-
-    if selected != "All":
-        df = df[df["status"] == selected]
-
-    st.dataframe(
-        df,
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    st.download_button(
-        "Download Placement Outcomes CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        file_name="placement_outcomes.csv",
-        mime="text/csv",
-    )
-    # =========================================================
-# 14. CONNECT ASK MENTOR PAGE
-# =========================================================
-
-def ask_mentor(user):
-    ask_mentor_page(user)
-
-
-# =========================================================
-# 15. MAIN APPLICATION AND NAVIGATION
-# =========================================================
+# ============================================================
+# MAIN APPLICATION
+# ============================================================
 
 def main():
-    # Initialize database and default mentor account.
+
     setup_database()
     create_default_mentor()
 
     user = st.session_state.get("user")
 
-    # Show login page if the user is not logged in.
-    if user is None:
+    if not user:
+
         login_page()
         return
 
-    # -----------------------------------------------------
-    # SIDEBAR NAVIGATION
-    # -----------------------------------------------------
-
     with st.sidebar:
-        st.markdown("## 🎓 CSE PLACEMENT PORTAL")
 
-        st.write(f"**{user['full_name']}**")
-        st.caption(user["role"].upper())
+        st.title(
+            "🎓 CSE Placement Portal"
+        )
+
+        st.write(
+            f"**{user['full_name']}**"
+        )
+
+        st.caption(
+            user["role"].upper()
+        )
 
         st.divider()
 
@@ -1715,9 +1393,7 @@ def main():
 
             pages = [
                 "Dashboard",
-                "Student Questions",
-                "Student Feedback",
-                "Placement Outcomes",
+                "Student Questions"
             ]
 
         else:
@@ -1725,114 +1401,77 @@ def main():
             pages = [
                 "Dashboard",
                 "Resources & Tasks",
-                "Placement Readiness Assessment",
+                "ML Readiness Prediction",
                 "Ask a Mentor",
-                "Mentor Responses & Feedback",
-                "Placement Tracker",
+                "Placement Tracker"
             ]
 
         page = st.radio(
             "Navigation",
             pages,
-            label_visibility="collapsed",
+            label_visibility="collapsed"
         )
 
         st.divider()
 
-        # -------------------------------------------------
-        # LOGOUT
-        # -------------------------------------------------
-
         if st.button(
-            "🚪 Logout",
-            use_container_width=True,
+            "Logout",
+            use_container_width=True
         ):
-            st.session_state.pop("user", None)
-            st.rerun()
 
-    # -----------------------------------------------------
-    # MENTOR PAGES
-    # -----------------------------------------------------
+            st.session_state.pop(
+                "user",
+                None
+            )
+
+            st.session_state.pop(
+                "latest_ml_result",
+                None
+            )
+
+            st.rerun()
 
     if user["role"] == "mentor":
 
-        routes = {
-            "Dashboard": lambda: mentor_dashboard(user),
+        if page == "Dashboard":
 
-            "Student Questions":
-                lambda: mentor_questions(user),
+            mentor_dashboard(user)
 
-            "Student Feedback":
-                mentor_feedback,
+        elif page == "Student Questions":
 
-            "Placement Outcomes":
-                mentor_outcomes,
-        }
-
-    # -----------------------------------------------------
-    # STUDENT PAGES
-    # -----------------------------------------------------
+            mentor_questions(user)
 
     else:
 
         routes = {
-            "Dashboard":
-                lambda: student_dashboard(user),
+            "Dashboard": lambda: student_dashboard(user),
 
-            "Resources & Tasks":
-                lambda: resources_tasks_page(user),
+            "Resources & Tasks": lambda: resources_page(user),
 
-            "Placement Readiness Assessment":
-                lambda: placement_readiness(user),
+            "ML Readiness Prediction": lambda: readiness_page(user),
 
-            "Ask a Mentor":
-                lambda: ask_mentor(user),
+            "Ask a Mentor": lambda: ask_mentor_page(user),
 
-            "Mentor Responses & Feedback":
-                lambda: responses_feedback(user),
-
-            "Placement Tracker":
-                lambda: placement_tracker(user),
+            "Placement Tracker": lambda: tracker_page(user),
         }
 
-    # Display selected page.
-    routes[page]()
+        routes[page]()
 
 
-# =========================================================
-# 16. APPLICATION ENTRY POINT AND ERROR HANDLING
-# =========================================================
+# ============================================================
+# APPLICATION ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
 
     try:
+
         main()
 
-    except sqlite3.Error as error:
-
-        print(traceback.format_exc())
-
-        st.error("A database error occurred.")
-
-        st.code(str(error))
-
-        st.warning(
-            "Back up your database before attempting database changes."
-        )
-
-    except Exception as error:
-
-        print(traceback.format_exc())
+    except Exception as exc:
 
         st.error(
-            "The application encountered an unexpected error."
+            f"Application error: {type(exc).__name__}: {exc}"
         )
 
-        st.code(
-            f"{type(error).__name__}: {error}"
-        )
-
-        st.info(
-            "The full error traceback has been written "
-            "to the application logs."
-        )
+        st.exception(exc)
